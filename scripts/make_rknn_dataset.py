@@ -2,58 +2,23 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 import cv2
 import numpy as np
 
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
-def get_dir(src_point, rot_rad):
-    sn, cs = np.sin(rot_rad), np.cos(rot_rad)
-    return np.array([
-        src_point[0] * cs - src_point[1] * sn,
-        src_point[0] * sn + src_point[1] * cs,
-    ], dtype=np.float32)
-
-
-def get_3rd_point(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    direct = a - b
-    return b + np.array([-direct[1], direct[0]], dtype=np.float32)
-
-
-def get_affine_transform(center: np.ndarray, scale: np.ndarray, rot: float, output_size):
-    if not isinstance(scale, np.ndarray):
-        scale = np.array(scale, dtype=np.float32)
-
-    src_w, src_h = scale[0], scale[1]
-    dst_w, dst_h = output_size
-    rot_rad = np.pi * rot / 180.0
-    src_dir = get_dir([0, -0.5 * src_h], rot_rad)
-    dst_dir = np.array([0, -0.5 * dst_h], dtype=np.float32)
-
-    src = np.zeros((3, 2), dtype=np.float32)
-    dst = np.zeros((3, 2), dtype=np.float32)
-    src[0, :] = center
-    src[1, :] = center + src_dir
-    dst[0, :] = [dst_w * 0.5, dst_h * 0.5]
-    dst[1, :] = np.array([dst_w * 0.5, dst_h * 0.5], dtype=np.float32) + dst_dir
-    src[2, :] = get_3rd_point(src[0, :], src[1, :])
-    dst[2, :] = get_3rd_point(dst[0, :], dst[1, :])
-    return cv2.getAffineTransform(np.float32(src), np.float32(dst))
-
+from centernet_spot.transforms import resize_and_pad_image
 
 def preprocess(image: np.ndarray, input_w: int, input_h: int) -> np.ndarray:
-    orig_h, orig_w = image.shape[:2]
-    center = np.array([orig_w / 2.0, orig_h / 2.0], dtype=np.float32)
-    scale = np.array([orig_w, orig_h], dtype=np.float32)
-    trans_input = get_affine_transform(center, scale, 0, (input_w, input_h))
-
     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    image = cv2.warpAffine(image, trans_input, (input_w, input_h), flags=cv2.INTER_LINEAR)
+    image, _ = resize_and_pad_image(image, (input_w, input_h))
     image = image.astype(np.float32) / 255.0
-    mean = np.array([0.5, 0.5, 0.5], dtype=np.float32).reshape(1, 1, 3)
-    std = np.array([0.5, 0.5, 0.5], dtype=np.float32).reshape(1, 1, 3)
-    image = (image - mean) / std
     image = image.transpose(2, 0, 1).astype(np.float32)
     image = np.expand_dims(image, axis=0)
     return image
@@ -65,8 +30,8 @@ def main() -> int:
     parser.add_argument('--out-dir', default='/media/psf/Downloads/光斑定位-centernet/outputs/spot_centernet_resnet18/rknn_dataset')
     parser.add_argument('--dataset-txt', default='/media/psf/Downloads/光斑定位-centernet/outputs/spot_centernet_resnet18/rknn_dataset.txt')
     parser.add_argument('--limit', type=int, default=32)
-    parser.add_argument('--input-width', type=int, default=640)
-    parser.add_argument('--input-height', type=int, default=384)
+    parser.add_argument('--input-width', type=int, default=512)
+    parser.add_argument('--input-height', type=int, default=512)
     args = parser.parse_args()
 
     photos_dir = Path(args.photos)

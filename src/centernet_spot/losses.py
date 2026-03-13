@@ -32,7 +32,7 @@ def transpose_and_gather_feat(feat: torch.Tensor, ind: torch.Tensor) -> torch.Te
 
 def reg_l1_loss(pred: torch.Tensor, target: torch.Tensor, ind: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
     pred = transpose_and_gather_feat(pred, ind)
-    mask = mask.unsqueeze(2).float()
+    mask = mask.unsqueeze(2).expand_as(pred).float()
     loss = F.l1_loss(pred * mask, target * mask, reduction="sum")
     loss = loss / (mask.sum() + 1e-4)
     return loss

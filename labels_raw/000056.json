@@ -3,30 +3,20 @@
   "flags": {},
   "shapes": [
     {
-      "label": "spot",
+      "label": "spot_size",
       "points": [
         [
-          84.06896551724137,
-          46.47701149425288
-        ]
-      ],
-      "group_id": null,
-      "description": "",
-      "shape_type": "point",
-      "flags": {},
-      "mask": null
-    },
-    {
-      "label": "spot",
-      "points": [
-        [
-          84.06896551724137,
+          64.5287356321839,
           90.72988505747126
+        ],
+        [
+          101.88505747126436,
+          90.15517241379311
         ]
       ],
       "group_id": null,
       "description": "",
-      "shape_type": "point",
+      "shape_type": "line",
       "flags": {},
       "mask": null
     },
@@ -34,8 +24,8 @@
       "label": "spot",
       "points": [
         [
-          88.0919540229885,
-          141.8793103448276
+          81.77011494252872,
+          45.90229885057472
         ]
       ],
       "group_id": null,
@@ -49,6 +39,34 @@
       "points": [
         [
           82.91954022988504,
+          90.72988505747126
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "point",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "spot",
+      "points": [
+        [
+          86.94252873563218,
+          140.1551724137931
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "point",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "spot",
+      "points": [
+        [
+          82.34482758620689,
           186.132183908046
         ]
       ],
@@ -62,8 +80,8 @@
       "label": "spot",
       "points": [
         [
-          80.6206896551724,
-          229.8103448275862
+          81.19540229885057,
+          229.81034482758622
         ]
       ],
       "group_id": null,
@@ -76,8 +94,8 @@
       "label": "spot",
       "points": [
         [
-          77.7471264367816,
-          275.78735632183907
+          76.59770114942528,
+          276.36206896551727
         ]
       ],
       "group_id": null,
@@ -90,8 +108,92 @@
       "label": "spot",
       "points": [
         [
-          79.47126436781608,
+          78.32183908045977,
           320.61494252873564
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "point",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "spot",
+      "points": [
+        [
+          137.51724137931032,
+          322.91379310344826
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "point",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "spot",
+      "points": [
+        [
+          139.81609195402297,
+          272.3390804597701
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "point",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "spot",
+      "points": [
+        [
+          139.2413793103448,
+          225.21264367816093
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "point",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "spot",
+      "points": [
+        [
+          139.2413793103448,
+          182.683908045977
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "point",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "spot",
+      "points": [
+        [
+          139.81609195402297,
+          136.70689655172413
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "point",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "spot",
+      "points": [
+        [
+          138.0919540229885,
+          90.15517241379311
         ]
       ],
       "group_id": null,
@@ -118,92 +220,8 @@
       "label": "spot",
       "points": [
         [
-          138.0919540229885,
-          89.58045977011494
-        ]
-      ],
-      "group_id": null,
-      "description": "",
-      "shape_type": "point",
-      "flags": {},
-      "mask": null
-    },
-    {
-      "label": "spot",
-      "points": [
-        [
-          139.81609195402297,
-          135.55747126436782
-        ]
-      ],
-      "group_id": null,
-      "description": "",
-      "shape_type": "point",
-      "flags": {},
-      "mask": null
-    },
-    {
-      "label": "spot",
-      "points": [
-        [
-          139.2413793103448,
-          182.10919540229884
-        ]
-      ],
-      "group_id": null,
-      "description": "",
-      "shape_type": "point",
-      "flags": {},
-      "mask": null
-    },
-    {
-      "label": "spot",
-      "points": [
-        [
-          138.66666666666666,
-          225.21264367816093
-        ]
-      ],
-      "group_id": null,
-      "description": "",
-      "shape_type": "point",
-      "flags": {},
-      "mask": null
-    },
-    {
-      "label": "spot",
-      "points": [
-        [
-          139.81609195402297,
-          271.764367816092
-        ]
-      ],
-      "group_id": null,
-      "description": "",
-      "shape_type": "point",
-      "flags": {},
-      "mask": null
-    },
-    {
-      "label": "spot",
-      "points": [
-        [
-          138.66666666666666,
-          322.3390804597701
-        ]
-      ],
-      "group_id": null,
-      "description": "",
-      "shape_type": "point",
-      "flags": {},
-      "mask": null
-    },
-    {
-      "label": "spot",
-      "points": [
-        [
-          196.13793103448273,
-          41.87931034482759
+          195.56321839080456,
+          41.304597701149426
         ]
       ],
       "group_id": null,
@@ -217,7 +235,7 @@
       "points": [
         [
           194.98850574712642,
-          87.85632183908045
+          88.43103448275862
         ]
       ],
       "group_id": null,
@@ -230,8 +248,8 @@
       "label": "spot",
       "points": [
         [
-          196.13793103448273,
-          134.40804597701148
+          196.7126436781609,
+          134.4080459770115
         ]
       ],
       "group_id": null,
@@ -244,7 +262,7 @@
       "label": "spot",
       "points": [
         [
-          196.13793103448273,
+          194.98850574712642,
           180.95977011494253
         ]
       ],
@@ -258,8 +276,8 @@
       "label": "spot",
       "points": [
         [
-          197.28735632183907,
-          224.0632183908046
+          196.7126436781609,
+          224.63793103448276
         ]
       ],
       "group_id": null,
@@ -273,7 +291,7 @@
       "points": [
         [
           197.8620689655172,
-          271.764367816092
+          272.3390804597701
         ]
       ],
       "group_id": null,
@@ -286,8 +304,8 @@
       "label": "spot",
       "points": [
         [
-          197.28735632183907,
-          318.31609195402297
+          197.8620689655172,
+          317.7413793103448
         ]
       ],
       "group_id": null,
@@ -300,8 +318,8 @@
       "label": "spot",
       "points": [
         [
-          248.43678160919538,
-          38.431034482758626
+          252.4597701149425,
+          317.1666666666667
         ]
       ],
       "group_id": null,
@@ -314,63 +332,7 @@
       "label": "spot",
       "points": [
         [
-          251.3103448275862,
-          85.55747126436782
-        ]
-      ],
-      "group_id": null,
-      "description": "",
-      "shape_type": "point",
-      "flags": {},
-      "mask": null
-    },
-    {
-      "label": "spot",
-      "points": [
-        [
-          248.43678160919538,
-          130.95977011494253
-        ]
-      ],
-      "group_id": null,
-      "description": "",
-      "shape_type": "point",
-      "flags": {},
-      "mask": null
-    },
-    {
-      "label": "spot",
-      "points": [
-        [
-          246.13793103448273,
-          177.51149425287355
-        ]
-      ],
-      "group_id": null,
-      "description": "",
-      "shape_type": "point",
-      "flags": {},
-      "mask": null
-    },
-    {
-      "label": "spot",
-      "points": [
-        [
-          249.58620689655172,
-          224.0632183908046
-        ]
-      ],
-      "group_id": null,
-      "description": "",
-      "shape_type": "point",
-      "flags": {},
-      "mask": null
-    },
-    {
-      "label": "spot",
-      "points": [
-        [
-          254.18390804597698,
+          253.03448275862067,
           271.1896551724138
         ]
       ],
@@ -384,8 +346,8 @@
       "label": "spot",
       "points": [
         [
-          253.60919540229884,
-          318.89080459770116
+          249.58620689655172,
+          224.63793103448276
         ]
       ],
       "group_id": null,
@@ -398,8 +360,8 @@
       "label": "spot",
       "points": [
         [
-          304.18390804597703,
-          39.58045977011495
+          247.28735632183907,
+          178.66091954022988
         ]
       ],
       "group_id": null,
@@ -412,8 +374,50 @@
       "label": "spot",
       "points": [
         [
-          301.88505747126436,
-          83.25862068965517
+          247.8620689655172,
+          130.38505747126436
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "point",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "spot",
+      "points": [
+        [
+          250.73563218390802,
+          84.98275862068965
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "point",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "spot",
+      "points": [
+        [
+          247.8620689655172,
+          39.58045977011494
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "point",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "spot",
+      "points": [
+        [
+          304.7586206896552,
+          38.431034482758626
         ]
       ],
       "group_id": null,
@@ -427,7 +431,7 @@
       "points": [
         [
           301.3103448275862,
-          126.9367816091954
+          83.83333333333334
         ]
       ],
       "group_id": null,
@@ -440,8 +444,8 @@
       "label": "spot",
       "points": [
         [
-          303.60919540229884,
-          176.9367816091954
+          300.735632183908,
+          127.51149425287358
         ]
       ],
       "group_id": null,
@@ -454,7 +458,21 @@
       "label": "spot",
       "points": [
         [
-          306.48275862068965,
+          303.0344827586207,
+          178.08620689655172
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "point",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "spot",
+      "points": [
+        [
+          304.7586206896552,
           225.21264367816093
         ]
       ],
@@ -482,8 +500,8 @@
       "label": "spot",
       "points": [
         [
-          310.5057471264368,
-          318.89080459770116
+          309.35632183908046,
+          317.1666666666667
         ]
       ],
       "group_id": null,
@@ -496,64 +514,8 @@
       "label": "spot",
       "points": [
         [
-          357.632183908046,
-          36.13218390804598
-        ]
-      ],
-      "group_id": null,
-      "description": "",
-      "shape_type": "point",
-      "flags": {},
-      "mask": null
-    },
-    {
-      "label": "spot",
-      "points": [
-        [
-          357.632183908046,
-          78.66091954022988
-        ]
-      ],
-      "group_id": null,
-      "description": "",
-      "shape_type": "point",
-      "flags": {},
-      "mask": null
-    },
-    {
-      "label": "spot",
-      "points": [
-        [
-          360.5057471264368,
-          127.51149425287355
-        ]
-      ],
-      "group_id": null,
-      "description": "",
-      "shape_type": "point",
-      "flags": {},
-      "mask": null
-    },
-    {
-      "label": "spot",
-      "points": [
-        [
-          361.08045977011494,
-          176.36206896551724
-        ]
-      ],
-      "group_id": null,
-      "description": "",
-      "shape_type": "point",
-      "flags": {},
-      "mask": null
-    },
-    {
-      "label": "spot",
-      "points": [
-        [
-          361.6551724137931,
-          222.91379310344828
+          371.42528735632186,
+          314.2931034482759
         ]
       ],
       "group_id": null,
@@ -580,8 +542,8 @@
       "label": "spot",
       "points": [
         [
-          412.2298850574713,
-          34.98275862068966
+          361.08045977011494,
+          224.0632183908046
         ]
       ],
       "group_id": null,
@@ -594,8 +556,8 @@
       "label": "spot",
       "points": [
         [
-          412.2298850574713,
-          79.8103448275862
+          361.08045977011494,
+          175.21264367816093
         ]
       ],
       "group_id": null,
@@ -608,7 +570,7 @@
       "label": "spot",
       "points": [
         [
-          416.82758620689657,
+          361.08045977011494,
           126.36206896551724
         ]
       ],
@@ -622,7 +584,77 @@
       "label": "spot",
       "points": [
         [
-          420.2758620689655,
+          358.2068965517241,
+          79.8103448275862
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "point",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "spot",
+      "points": [
+        [
+          356.48275862068965,
+          35.55747126436782
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "point",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "spot",
+      "points": [
+        [
+          412.2298850574713,
+          34.4080459770115
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "point",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "spot",
+      "points": [
+        [
+          411.6551724137931,
+          80.38505747126437
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "point",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "spot",
+      "points": [
+        [
+          416.2528735632184,
+          126.36206896551724
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "point",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "spot",
+      "points": [
+        [
+          419.7011494252874,
           174.63793103448276
         ]
       ],
@@ -636,8 +668,8 @@
       "label": "spot",
       "points": [
         [
-          420.85057471264366,
-          222.33908045977012
+          421.42528735632186,
+          222.91379310344828
         ]
       ],
       "group_id": null,
@@ -650,8 +682,8 @@
       "label": "spot",
       "points": [
         [
-          419.7011494252874,
-          269.4655172413793
+          417.9770114942529,
+          268.89080459770116
         ]
       ],
       "group_id": null,
@@ -664,45 +696,13 @@
       "label": "spot",
       "points": [
         [
-          419.7011494252874,
-          309.1206896551724
+          418.55172413793105,
+          310.2701149425287
         ]
       ],
       "group_id": null,
       "description": "",
       "shape_type": "point",
-      "flags": {},
-      "mask": null
-    },
-    {
-      "label": "spot",
-      "points": [
-        [
-          369.1264367816092,
-          316.5919540229885
-        ]
-      ],
-      "group_id": null,
-      "description": "",
-      "shape_type": "point",
-      "flags": {},
-      "mask": null
-    },
-    {
-      "label": "spot_size",
-      "points": [
-        [
-          232.91954022988503,
-          178.08620689655172
-        ],
-        [
-          257.632183908046,
-          178.08620689655172
-        ]
-      ],
-      "group_id": null,
-      "description": "",
-      "shape_type": "line",
       "flags": {},
       "mask": null
     }

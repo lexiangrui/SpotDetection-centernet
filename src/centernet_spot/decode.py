@@ -35,10 +35,7 @@ def _topk(scores: torch.Tensor, k: int) -> tuple[torch.Tensor, ...]:
 def decode_predictions(
     heatmap: torch.Tensor,
     reg: torch.Tensor,
-    center: np.ndarray,
-    scale: np.ndarray,
-    output_width: int,
-    output_height: int,
+    transform: dict[str, float | int],
     topk: int = 100,
     score_threshold: float = 0.2,
     nms_kernel: int = 3,
@@ -59,7 +56,7 @@ def decode_predictions(
         ],
         axis=1,
     )
-    coords = transform_preds(coords, center, scale, (output_width, output_height))
+    coords = transform_preds(coords, transform)
 
     detections: List[dict] = []
     for score, (x, y) in zip(scores.tolist(), coords.tolist()):

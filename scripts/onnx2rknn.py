@@ -33,13 +33,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--verbose", action="store_true")
     return parser.parse_args()
 
-
-def get_rknn_preprocess(cfg: dict) -> tuple[list[list[float]], list[list[float]]]:
-    mean = [float(v) * 255.0 for v in cfg["data"]["normalize_mean"]]
-    std = [float(v) * 255.0 for v in cfg["data"]["normalize_std"]]
-    return [mean], [std]
-
-
 def main() -> None:
     args = parse_args()
 
@@ -53,8 +46,7 @@ def main() -> None:
             "rknn-toolkit2 is not installed in the current Python environment."
         ) from exc
 
-    cfg = load_config(args.config)
-    mean_values, std_values = get_rknn_preprocess(cfg)
+    load_config(args.config)
 
     onnx_path = Path(args.onnx)
     output_path = Path(args.output)
@@ -64,8 +56,8 @@ def main() -> None:
 
     ret = rknn.config(
         target_platform=args.target_platform,
-        mean_values=mean_values,
-        std_values=std_values,
+        mean_values=[[0.0, 0.0, 0.0]],
+        std_values=[[255.0, 255.0, 255.0]],
     )
     if ret != 0:
         raise RuntimeError(f"rknn.config failed with code {ret}")
@@ -90,8 +82,8 @@ def main() -> None:
     print(f"exported RKNN to {output_path}")
     print(f"target_platform={args.target_platform}")
     print(f"quantize={args.quantize}")
-    print(f"mean_values={mean_values}")
-    print(f"std_values={std_values}")
+    print("mean_values=[[0.0, 0.0, 0.0]]")
+    print("std_values=[[255.0, 255.0, 255.0]]")
 
 
 if __name__ == "__main__":

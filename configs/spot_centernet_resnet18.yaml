@@ -17,16 +17,10 @@ data:
   class_name: spot
   spot_size_label: spot_size
   spot_size_shape_type: line
-  input_width: 640
-  input_height: 384
+  input_width: 512
+  input_height: 512
   down_ratio: 4
   max_objects: 512
-  point_box_width: 36
-  point_box_height: 36
-  gaussian_min_overlap: 0.7
-  min_gaussian_radius: 5
-  normalize_mean: [0.5, 0.5, 0.5]
-  normalize_std: [0.5, 0.5, 0.5]
   train_augment:
     brightness_gain: 0.15
     noise_std: 0.01

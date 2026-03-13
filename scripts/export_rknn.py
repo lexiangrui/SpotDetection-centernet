@@ -5,7 +5,14 @@ import argparse
 from pathlib import Path
 import sys
 
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
 from rknn.api import RKNN
+
+from centernet_spot.config import load_config
 
 
 def parse_args() -> argparse.Namespace:
@@ -24,6 +31,11 @@ def parse_args() -> argparse.Namespace:
         "--target-platform",
         default="rk3576",
         help="RKNN target platform, e.g. rk3576/rk3588",
+    )
+    parser.add_argument(
+        "--config",
+        default="configs/spot_centernet_resnet18.yaml",
+        help="Project config used to derive RKNN preprocessing parameters",
     )
     parser.add_argument(
         "--input-width",
@@ -49,11 +61,11 @@ def parse_args() -> argparse.Namespace:
     )
     return parser.parse_args()
 
-
 def main() -> int:
     args = parse_args()
     onnx_path = Path(args.onnx)
     output_path = Path(args.output)
+    load_config(args.config)
 
     if not onnx_path.exists():
         print(f"[ERR] ONNX not found: {onnx_path}", file=sys.stderr)
@@ -71,6 +83,8 @@ def main() -> int:
         ret = rknn.config(
             target_platform=args.target_platform,
             optimization_level=3,
+            mean_values=[[0.0, 0.0, 0.0]],
+            std_values=[[255.0, 255.0, 255.0]],
         )
         if ret != 0:
             print(f"[ERR] rknn.config failed: {ret}", file=sys.stderr)
@@ -100,6 +114,8 @@ def main() -> int:
             return ret
 
         print(f"[OK] RKNN exported to: {output_path}")
+        print("[INFO] mean_values=[[0.0, 0.0, 0.0]]")
+        print("[INFO] std_values=[[255.0, 255.0, 255.0]]")
         return 0
     finally:
         rknn.release()
