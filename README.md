@@ -147,6 +147,11 @@ photos/
 
 ### 4.2 Labelme 标注格式
 
+
+```bash
+   labelme photos/ --output labels_raw/
+   ```
+
 每个目标点使用：
 
 - `label = "spot"`
@@ -199,13 +204,10 @@ photos/
 
 ## 5. 配置文件
 
-当前提供 3 个配置文件：
 
-- `configs/spot_centernet_dla34.yaml`
-- `configs/spot_centernet_resnet18.yaml`
-- `configs/spot_centernet_unet.yaml`
+- `configs/spot_centernet.yaml`
 
-它们的主要区别是骨干网络和输出目录。
+
 
 ### 5.1 当前默认配置值
 
@@ -247,12 +249,11 @@ photos/
 
 ### 6.1 基本命令
 
-`train.py` 当前代码里的 `--config` 默认值仍是占位路径 `configs/spot_centernet.yaml`，该文件在仓库中不存在，因此训练时请始终显式传入配置文件。
+
 
 ```bash
-python3 scripts/train.py --config configs/spot_centernet_dla34.yaml
-python3 scripts/train.py --config configs/spot_centernet_resnet18.yaml
-python3 scripts/train.py --config configs/spot_centernet_unet.yaml
+python3 scripts/train.py --config configs/spot_centernet.yaml
+
 ```
 
 ### 6.2 可选参数
@@ -307,8 +308,8 @@ python3 scripts/train.py \
 
 ```bash
 python3 scripts/infer.py \
-  --config configs/spot_centernet_resnet18.yaml \
-  --checkpoint outputs/spot_centernet_resnet18/best.pt \
+  --config configs/spot_centernet.yaml \
+  --checkpoint models/spot_centernet_resnet18/best.pt \
   --input photos/000008.jpg \
   --output outputs/infer_single
 ```
@@ -317,18 +318,19 @@ python3 scripts/infer.py \
 
 ```bash
 python3 scripts/infer.py \
-  --config configs/spot_centernet_resnet18.yaml \
-  --checkpoint outputs/spot_centernet_resnet18/best.pt \
+  --config configs/spot_centernet.yaml \
+  --checkpoint models/spot_centernet_resnet18/best.pt \
   --input photos \
   --output outputs/infer_resnet18
 ```
+
 
 #### 单个视频
 
 ```bash
 python3 scripts/infer.py \
-  --config configs/spot_centernet_resnet18.yaml \
-  --checkpoint outputs/spot_centernet_resnet18/best.pt \
+  --config configs/spot_centernet.yaml \
+  --checkpoint models/spot_centernet_resnet18/best.pt \
   --input video/capture.mp4 \
   --output outputs/infer_video
 ```
@@ -337,12 +339,18 @@ python3 scripts/infer.py \
 
 ```bash
 python3 scripts/infer.py \
-  --config configs/spot_centernet_resnet18.yaml \
-  --checkpoint outputs/spot_centernet_resnet18/best.pt \
+  --config configs/spot_centernet.yaml \
+  --checkpoint models/spot_centernet_resnet18/best.pt \
   --input video \
   --output outputs/infer_video
 ```
-
+```bash
+python3 scripts/infer.py \
+  --config configs/spot_centernet.yaml \
+  --checkpoint models/spot_centernet_dla34/best.pt \
+  --input video \
+  --output outputs/infer_video
+```
 ### 7.2 参数说明
 
 | 参数 | 必选 | 默认值 | 说明 |
@@ -431,7 +439,7 @@ JSON 示例：
 
 ```bash
 python3 scripts/export_onnx.py \
-  --checkpoint outputs/spot_centernet_resnet18/best.pt \
+  --checkpoint models/spot_centernet_resnet18/best.pt \
   --output outputs/spot_centernet_resnet18/best.onnx
 ```
 
@@ -624,13 +632,13 @@ python3 scripts/train.py --config configs/spot_centernet_resnet18.yaml
 # 2) 推理
 python3 scripts/infer.py \
   --config configs/spot_centernet_resnet18.yaml \
-  --checkpoint outputs/spot_centernet_resnet18/best.pt \
+  --checkpoint models/spot_centernet_resnet18/best.pt \
   --input photos \
   --output outputs/infer_resnet18
 
 # 3) 导出 ONNX
 python3 scripts/export_onnx.py \
-  --checkpoint outputs/spot_centernet_resnet18/best.pt \
+  --checkpoint models/spot_centernet_resnet18/best.pt \
   --output outputs/spot_centernet_resnet18/best.onnx
 
 # 4) 如需 RKNN，先准备量化数据，再转换

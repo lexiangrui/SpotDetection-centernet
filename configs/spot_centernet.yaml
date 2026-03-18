@@ -1,0 +1,43 @@
+experiment_name: spot_centernet
+seed: 42
+
+model:
+  backbone: resnet18
+  neck_channels: 128
+  head_channels: 64
+
+data:
+  root: .
+  image_dir: photos
+  label_dir: labels_raw
+  split_dir: splits
+  train_split: train.txt
+  val_split: val.txt
+  val_ratio: 0.25
+  class_name: spot
+  spot_size_label: spot_size
+  spot_size_shape_type: line
+  input_width: 512
+  input_height: 512
+  down_ratio: 4
+  max_objects: 512
+  train_augment:
+    brightness_gain: 0
+    noise_std: 0
+
+train:
+  batch_size: 8
+  num_workers: 0
+  epochs: 60
+  lr: 0.001
+  weight_decay: 0.0001
+  log_interval: 5
+  save_dir: models/spot_centernet_resnet18_kl
+  heatmap_loss_type: kl
+  heatmap_loss_weight: 1.0
+  offset_loss_weight: 1.0
+
+infer:
+  score_threshold: 0.2
+  topk: 256
+  nms_kernel: 9

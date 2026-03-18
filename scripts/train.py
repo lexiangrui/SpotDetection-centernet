@@ -5,6 +5,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Callable
 
 import cv2
 import numpy as np
@@ -19,7 +20,7 @@ if str(SRC) not in sys.path:
 
 from centernet_spot.config import load_config
 from centernet_spot.data import SpotDataset
-from centernet_spot.losses import focal_loss, reg_l1_loss
+from centernet_spot.losses import get_heatmap_loss, reg_l1_loss
 from centernet_spot.model import SpotCenterNet
 from centernet_spot.split import discover_labeled_ids, make_train_val_split, write_split_file
 from centernet_spot.utils import ensure_dir, get_device, save_json, set_seed
@@ -69,6 +70,7 @@ def run_epoch(
     optimizer: torch.optim.Optimizer | None,
     device: torch.device,
     cfg: dict,
+    heatmap_loss_fn: Callable,
 ) -> dict:
     training = optimizer is not None
     model.train(training)
@@ -85,7 +87,7 @@ def run_epoch(
         gt_mask = batch["reg_mask"].to(device)
 
         outputs = model(images)
-        hm_loss = focal_loss(outputs["heatmap"], gt_heatmap)
+        hm_loss = heatmap_loss_fn(outputs["heatmap"], gt_heatmap)
         reg_loss = reg_l1_loss(outputs["reg"], gt_reg, gt_ind, gt_mask)
         loss = (
             hm_loss * float(cfg["train"]["heatmap_loss_weight"])
@@ -315,6 +317,11 @@ def main() -> None:
     save_dir = ensure_dir(cfg["train"]["save_dir"])
     refresh_splits(cfg)
 
+    # 获取热图损失函数，默认使用mse
+    heatmap_loss_type = cfg["train"].get("heatmap_loss_type", "mse")
+    heatmap_loss_fn = get_heatmap_loss(heatmap_loss_type)
+    print(f"Using heatmap loss: {heatmap_loss_type}")
+
     train_loader = build_loader(cfg, split_name="train", training=True)
     val_loader = build_loader(cfg, split_name="val", training=False)
 
@@ -329,9 +336,9 @@ def main() -> None:
     history = []
 
     for epoch in range(1, int(cfg["train"]["epochs"]) + 1):
-        train_metrics = run_epoch(model, train_loader, optimizer, device, cfg)
+        train_metrics = run_epoch(model, train_loader, optimizer, device, cfg, heatmap_loss_fn)
         with torch.no_grad():
-            val_metrics = run_epoch(model, val_loader, optimizer=None, device=device, cfg=cfg)
+            val_metrics = run_epoch(model, val_loader, optimizer=None, device=device, cfg=cfg, heatmap_loss_fn=heatmap_loss_fn)
 
         record = {
             "epoch": epoch,
