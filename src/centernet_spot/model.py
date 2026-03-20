@@ -3,14 +3,36 @@ from __future__ import annotations
 from typing import List
 
 import torch
+from torch.hub import load_state_dict_from_url
 from torch import nn
 import torch.nn.functional as F
+from torchvision.models import (
+    MobileNet_V3_Large_Weights,
+    ResNet18_Weights,
+    mobilenet_v3_large,
+    resnet18,
+)
+
+from .utils import sigmoid_heatmap
 
 
 # ============================================================
 #  Backbone 注册表
 # ============================================================
 _BACKBONE_REGISTRY: dict[str, type[nn.Module]] = {}
+_DLA34_IMAGENET_URL = "http://dl.yf.io/dla/models/imagenet/dla34-ba72cf86.pth"
+
+
+def _resolve_torchvision_weights(pretrained: bool, weights: str | None, enum_cls, default_weight):
+    if not pretrained:
+        return None
+    if weights is None or str(weights).lower() == "default":
+        return default_weight
+    try:
+        return enum_cls[str(weights)]
+    except KeyError as exc:
+        available = ", ".join(weight.name for weight in enum_cls)
+        raise ValueError(f"Unknown weights '{weights}'. Available: {available}") from exc
 
 
 def register_backbone(name: str):
@@ -84,7 +106,7 @@ class _Tree(nn.Module):
                                root_dim=0, root_ks=root_ks, dilation=dilation, root_residual=root_residual)
             self.tree2 = _Tree(levels - 1, block, out_ch, out_ch,
                                root_dim=root_dim + out_ch, root_ks=root_ks,
-                               level_root=True, dilation=dilation, root_residual=root_residual)
+                               dilation=dilation, root_residual=root_residual)
         if levels == 1:
             self.root = _Root(root_dim, out_ch, root_ks, root_residual)
         self.level_root = level_root
@@ -114,7 +136,7 @@ class DLA34Backbone(nn.Module):
 
     out_channels: List[int] = [64, 128, 256, 512]
 
-    def __init__(self, **_kw) -> None:
+    def __init__(self, pretrained: bool = False, weights: str | None = None, progress: bool = True, **_kw) -> None:
         super().__init__()
         channels = [16, 32, 64, 128, 256, 512]
         levels = [1, 1, 1, 2, 2, 1]
@@ -128,6 +150,20 @@ class DLA34Backbone(nn.Module):
         self.level3 = _Tree(levels[3], block, channels[2], channels[3], stride=2, level_root=True)
         self.level4 = _Tree(levels[4], block, channels[3], channels[4], stride=2, level_root=True)
         self.level5 = _Tree(levels[5], block, channels[4], channels[5], stride=2, level_root=True)
+
+        if pretrained:
+            weight_name = "imagenet" if weights is None or str(weights).lower() == "default" else str(weights).lower()
+            if weight_name != "imagenet":
+                raise ValueError("DLA34 official pretrained weights only provide 'imagenet'.")
+
+            state_dict = load_state_dict_from_url(_DLA34_IMAGENET_URL, progress=progress, check_hash=True)
+            incompatible = self.load_state_dict(state_dict, strict=False)
+            unexpected = set(incompatible.unexpected_keys) - {"fc.weight", "fc.bias"}
+            if incompatible.missing_keys or unexpected:
+                raise RuntimeError(
+                    "Failed to load official DLA34 pretrained weights cleanly. "
+                    f"missing={incompatible.missing_keys}, unexpected={sorted(unexpected)}"
+                )
 
     @staticmethod
     def _make_conv(in_c, out_c, n, stride=1):
@@ -149,66 +185,26 @@ class DLA34Backbone(nn.Module):
 
 
 # ============================================================
-#  ResNet-18 Backbone (纯 PyTorch 实现, 不依赖 torchvision)
-# ============================================================
-
-class _ResBasicBlock(nn.Module):
-    expansion = 1
-
-    def __init__(self, in_ch: int, out_ch: int, stride: int = 1) -> None:
-        super().__init__()
-        self.conv1 = nn.Conv2d(in_ch, out_ch, 3, stride=stride, padding=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(out_ch)
-        self.relu = nn.ReLU(inplace=True)
-        self.conv2 = nn.Conv2d(out_ch, out_ch, 3, stride=1, padding=1, bias=False)
-        self.bn2 = nn.BatchNorm2d(out_ch)
-        self.downsample = (
-            nn.Sequential(nn.Conv2d(in_ch, out_ch, 1, stride=stride, bias=False), nn.BatchNorm2d(out_ch))
-            if stride != 1 or in_ch != out_ch else None
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        identity = x
-        out = self.relu(self.bn1(self.conv1(x)))
-        out = self.bn2(self.conv2(out))
-        if self.downsample is not None:
-            identity = self.downsample(x)
-        return self.relu(out + identity)
-
-
 @register_backbone("resnet18")
 class ResNet18Backbone(nn.Module):
     """ResNet-18 backbone，输出 4 层特征 (stride 4/8/16/32)，channels [64,128,256,512]。"""
 
     out_channels: List[int] = [64, 128, 256, 512]
 
-    def __init__(self, **_kw) -> None:
+    def __init__(self, pretrained: bool = False, weights: str | None = None, **_kw) -> None:
         super().__init__()
-        self.stem = nn.Sequential(
-            nn.Conv2d(3, 64, 7, stride=2, padding=3, bias=False),
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(3, stride=2, padding=1),
+        resolved_weights = _resolve_torchvision_weights(
+            pretrained=pretrained,
+            weights=weights,
+            enum_cls=ResNet18_Weights,
+            default_weight=ResNet18_Weights.DEFAULT,
         )
-        self.layer1 = self._make_layer(64, 64, 2, stride=1)    # stride 4
-        self.layer2 = self._make_layer(64, 128, 2, stride=2)   # stride 8
-        self.layer3 = self._make_layer(128, 256, 2, stride=2)  # stride 16
-        self.layer4 = self._make_layer(256, 512, 2, stride=2)  # stride 32
-
-        # 标准 kaiming 初始化
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
-            elif isinstance(m, nn.BatchNorm2d):
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
-
-    @staticmethod
-    def _make_layer(in_ch: int, out_ch: int, blocks: int, stride: int) -> nn.Sequential:
-        layers = [_ResBasicBlock(in_ch, out_ch, stride=stride)]
-        for _ in range(1, blocks):
-            layers.append(_ResBasicBlock(out_ch, out_ch, stride=1))
-        return nn.Sequential(*layers)
+        network = resnet18(weights=resolved_weights)
+        self.stem = nn.Sequential(network.conv1, network.bn1, network.relu, network.maxpool)
+        self.layer1 = network.layer1  # stride 4
+        self.layer2 = network.layer2  # stride 8
+        self.layer3 = network.layer3  # stride 16
+        self.layer4 = network.layer4  # stride 32
 
     def forward(self, x: torch.Tensor) -> List[torch.Tensor]:
         x = self.stem(x)
@@ -217,6 +213,41 @@ class ResNet18Backbone(nn.Module):
         c4 = self.layer3(c3)  # stride 16
         c5 = self.layer4(c4)  # stride 32
         return [c2, c3, c4, c5]
+
+
+# ============================================================
+#  MobileNetV3 Backbone
+# ============================================================
+
+@register_backbone("mobilenetv3_large")
+class MobileNetV3LargeBackbone(nn.Module):
+    """MobileNetV3-Large backbone，输出 4 层特征 (stride 4/8/16/32)。"""
+
+    out_channels: List[int] = [24, 40, 112, 960]
+    _feature_indices = (3, 6, 12, 16)
+
+    def __init__(self, pretrained: bool = True, weights: str | None = None, **_kw) -> None:
+        super().__init__()
+        resolved_weights = _resolve_torchvision_weights(
+            pretrained=pretrained,
+            weights=weights,
+            enum_cls=MobileNet_V3_Large_Weights,
+            default_weight=MobileNet_V3_Large_Weights.DEFAULT,
+        )
+        network = mobilenet_v3_large(weights=resolved_weights)
+        self.features = network.features
+
+    def forward(self, x: torch.Tensor) -> List[torch.Tensor]:
+        feats: List[torch.Tensor] = []
+        for idx, layer in enumerate(self.features):
+            x = layer(x)
+            if idx in self._feature_indices:
+                feats.append(x)
+        if len(feats) != len(self.out_channels):
+            raise RuntimeError(
+                f"Expected {len(self.out_channels)} MobileNetV3 feature maps, got {len(feats)}."
+            )
+        return feats
 
 
 # ============================================================
@@ -265,8 +296,10 @@ class _UpBlock(nn.Module):
 class UNetBackbone(nn.Module):
     """U-Net backbone，输出 4 层特征 (stride 4/8/16/32)。"""
 
-    def __init__(self, base_channels: int = 32, **_kw) -> None:
+    def __init__(self, base_channels: int = 32, pretrained: bool = False, **_kw) -> None:
         super().__init__()
+        if pretrained:
+            raise ValueError("UNet has no official pretrained weights in this project. Set pretrained=false.")
         c1 = base_channels
         c2 = base_channels * 2
         c3 = base_channels * 4
@@ -308,8 +341,27 @@ class UNetBackbone(nn.Module):
 
 
 # ============================================================
-#  Neck & Head (不变)
+#  Neck & Head
 # ============================================================
+
+class _DepthwiseSeparableBlock(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int) -> None:
+        super().__init__()
+        self.block = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, 1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, 3, padding=1, groups=out_channels, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, 1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.block(x)
+
 
 class FPNFusion(nn.Module):
     def __init__(self, in_channels_list: List[int], out_channels: int) -> None:
@@ -321,21 +373,22 @@ class FPNFusion(nn.Module):
                 nn.ReLU(inplace=True),
             ) for in_c in in_channels_list
         ])
-        self.output = nn.Sequential(
-            nn.Conv2d(out_channels, out_channels, 3, padding=1, bias=False),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True),
-        )
+        self.deep_context = _DepthwiseSeparableBlock(out_channels, out_channels)
+        self.refine = nn.ModuleList([
+            _DepthwiseSeparableBlock(out_channels * 2, out_channels)
+            for _ in range(len(in_channels_list) - 1)
+        ])
+        self.output = _DepthwiseSeparableBlock(out_channels, out_channels)
 
     def forward(self, features: List[torch.Tensor]) -> torch.Tensor:
-        target_size = features[0].shape[-2:]
-        fused = None
-        for feat, lat in zip(features, self.lateral):
-            x = lat(feat)
-            if x.shape[-2:] != target_size:
-                x = F.interpolate(x, size=target_size, mode="bilinear", align_corners=False)
-            fused = x if fused is None else fused + x
-        return self.output(fused)
+        pyramid = [lat(feat) for feat, lat in zip(features, self.lateral)]
+        x = self.deep_context(pyramid[-1])
+
+        for level in range(len(pyramid) - 2, -1, -1):
+            upsampled = F.interpolate(x, size=pyramid[level].shape[-2:], mode="bilinear", align_corners=False)
+            x = self.refine[level](torch.cat([pyramid[level], upsampled], dim=1))
+
+        return self.output(x)
 
 
 class CenterNetHead(nn.Module):
@@ -377,7 +430,8 @@ class SpotCenterNet(nn.Module):
     def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         features = self.backbone(x)
         feat = self.neck(features)
+        heatmap = sigmoid_heatmap(self.hm_head(feat))
         return {
-            "heatmap": self.hm_head(feat),
+            "heatmap": heatmap,
             "reg": self.reg_head(feat),
         }

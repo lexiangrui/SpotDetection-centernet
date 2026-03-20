@@ -23,7 +23,7 @@ from centernet_spot.data import SpotDataset
 from centernet_spot.losses import get_heatmap_loss, reg_l1_loss
 from centernet_spot.model import SpotCenterNet
 from centernet_spot.split import discover_labeled_ids, make_train_val_split, write_split_file
-from centernet_spot.utils import ensure_dir, get_device, save_json, set_seed
+from centernet_spot.utils import denormalize_image, ensure_dir, get_device, save_json, set_seed
 
 VIS_INTERVAL = 20
 
@@ -124,19 +124,17 @@ def run_epoch(
     }
 
 
-def tensor_to_bgr_image(image_tensor: torch.Tensor) -> np.ndarray:
+def tensor_to_bgr_image(image_tensor: torch.Tensor, cfg: dict) -> np.ndarray:
     image = image_tensor.detach().cpu().numpy().transpose(1, 2, 0)
-    image = np.clip(image, 0.0, 1.0)
+    image = denormalize_image(image, cfg)
     image = (image * 255).astype(np.uint8)
     return cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
 
 
-def heatmap_to_gray(heatmap_tensor: torch.Tensor, size: tuple[int, int], apply_sigmoid: bool) -> np.ndarray:
+def heatmap_to_gray(heatmap_tensor: torch.Tensor, size: tuple[int, int]) -> np.ndarray:
     heatmap = heatmap_tensor.detach().cpu()
     if heatmap.ndim == 3:
         heatmap = heatmap[0]
-    if apply_sigmoid:
-        heatmap = heatmap.sigmoid()
     heatmap_np = np.clip(heatmap.numpy(), 0.0, 1.0)
     heatmap_u8 = (heatmap_np * 255).astype(np.uint8)
     width, height = size
@@ -179,10 +177,10 @@ def save_epoch_visualization(
     if model_was_training:
         model.train()
 
-    input_bgr = tensor_to_bgr_image(images[0])
+    input_bgr = tensor_to_bgr_image(images[0], cfg)
     height, width = input_bgr.shape[:2]
-    gt_gray = heatmap_to_gray(gt_heatmap, (width, height), apply_sigmoid=False)
-    pred_gray = heatmap_to_gray(outputs["heatmap"][0], (width, height), apply_sigmoid=True)
+    gt_gray = heatmap_to_gray(gt_heatmap, (width, height))
+    pred_gray = heatmap_to_gray(outputs["heatmap"][0], (width, height))
 
     panels = [
         add_panel_title(input_bgr, "Input Image"),

@@ -11,6 +11,7 @@ from torch.utils.data import Dataset
 
 from .split import discover_labeled_ids, make_train_val_split, read_split_file
 from .transforms import build_resize_pad_transform, resize_and_pad_image, transform_point
+from .utils import normalize_rgb_image
 
 
 def gaussian2d(shape: Tuple[int, int], sigma: float = 1.0) -> np.ndarray:
@@ -182,7 +183,7 @@ class SpotDataset(Dataset):
         orig_h, orig_w = image.shape[:2]
         resized, input_transform = resize_and_pad_image(image, (self.input_w, self.input_h))
         output_transform = build_resize_pad_transform(orig_w, orig_h, self.out_w, self.out_h)
-        resized_f = resized.astype(np.float32) / 255.0
+        resized_f = normalize_rgb_image(resized, self.cfg)
         input_tensor = torch.from_numpy(resized_f.transpose(2, 0, 1)).float()
 
         heatmap = np.zeros((1, self.out_h, self.out_w), dtype=np.float32)

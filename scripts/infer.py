@@ -17,7 +17,7 @@ from centernet_spot.config import load_config
 from centernet_spot.decode import decode_predictions
 from centernet_spot.model import SpotCenterNet
 from centernet_spot.transforms import build_resize_pad_transform, resize_and_pad_image
-from centernet_spot.utils import ensure_dir, get_device, save_json
+from centernet_spot.utils import ensure_dir, get_device, normalize_rgb_image, save_json
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp"}
 VIDEO_SUFFIXES = {".mp4", ".avi", ".mov", ".mkv", ".mpeg", ".mpg", ".wmv", ".m4v"}
@@ -39,7 +39,7 @@ def preprocess(image: np.ndarray, cfg: dict) -> torch.Tensor:
     input_h = int(cfg["data"]["input_height"])
     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     image, _ = resize_and_pad_image(image, (input_w, input_h))
-    image = image.astype(np.float32) / 255.0
+    image = normalize_rgb_image(image, cfg)
     return torch.from_numpy(image.transpose(2, 0, 1)).unsqueeze(0).float()
 
 
@@ -103,7 +103,7 @@ def make_heatmap_vis(
     target_w: int,
 ) -> np.ndarray:
     """将模型输出的 heatmap 转换为灰度可视化图像。"""
-    hm = heatmap_tensor.sigmoid().squeeze().detach().cpu().numpy()  # [H, W]
+    hm = heatmap_tensor.squeeze().detach().cpu().numpy()  # [H, W]
     hm = np.clip(hm, 0.0, 1.0)
     hm_resized = restore_map_to_original_size(hm, output_transform, target_h, target_w)
     hm_uint8 = (hm_resized * 255).astype(np.uint8)

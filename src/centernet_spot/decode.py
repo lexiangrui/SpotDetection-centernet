@@ -40,9 +40,8 @@ def decode_predictions(
     score_threshold: float = 0.2,
     nms_kernel: int = 3,
 ) -> List[dict]:
-    heatmap = heatmap.sigmoid()
-    heatmap = _nms(heatmap, kernel=nms_kernel)
-    scores, inds, _, ys, xs = _topk(heatmap, k=topk)
+    suppressed_heatmap = _nms(heatmap, kernel=nms_kernel)
+    scores, inds, _, ys, xs = _topk(suppressed_heatmap, k=topk)
     reg = transpose_and_gather_feat(reg, inds)
 
     xs = xs + reg[..., 0]

@@ -2,9 +2,15 @@ experiment_name: spot_centernet
 seed: 42
 
 model:
-  backbone: resnet18
-  neck_channels: 128
-  head_channels: 64
+  backbone: mobilenetv3_large
+  neck_channels: 96
+  head_channels: 48
+  backbone_kwargs:
+    pretrained: true
+    weights: default
+  input_normalization:
+    mean: [0.485, 0.456, 0.406]
+    std: [0.229, 0.224, 0.225]
 
 data:
   root: .
@@ -17,8 +23,8 @@ data:
   class_name: spot
   spot_size_label: spot_size
   spot_size_shape_type: line
-  input_width: 512
-  input_height: 512
+  input_width: 640
+  input_height: 640
   down_ratio: 4
   max_objects: 512
   train_augment:
@@ -26,18 +32,18 @@ data:
     noise_std: 0
 
 train:
-  batch_size: 8
+  batch_size: 4
   num_workers: 0
   epochs: 60
-  lr: 0.001
+  lr: 0.0005
   weight_decay: 0.0001
   log_interval: 5
-  save_dir: models/spot_centernet_resnet18_kl
-  heatmap_loss_type: kl
+  save_dir: models/spot_centernet_mobilenetv3_focal
+  heatmap_loss_type: focal
   heatmap_loss_weight: 1.0
   offset_loss_weight: 1.0
 
 infer:
-  score_threshold: 0.2
+  score_threshold: 0.6
   topk: 256
-  nms_kernel: 9
+  nms_kernel: 5

@@ -319,9 +319,9 @@ python3 scripts/infer.py \
 ```bash
 python3 scripts/infer.py \
   --config configs/spot_centernet.yaml \
-  --checkpoint models/spot_centernet_resnet18/best.pt \
+  --checkpoint models/spot_centernet_resnet18_focal/best.pt \
   --input photos \
-  --output outputs/infer_resnet18
+  --output outputs/spot_centernet_resnet18_focal
 ```
 
 
@@ -330,7 +330,7 @@ python3 scripts/infer.py \
 ```bash
 python3 scripts/infer.py \
   --config configs/spot_centernet.yaml \
-  --checkpoint models/spot_centernet_resnet18/best.pt \
+  --checkpoint models/spot_centernet_mobilenetv3_focal/best.pt \
   --input video/capture.mp4 \
   --output outputs/infer_video
 ```

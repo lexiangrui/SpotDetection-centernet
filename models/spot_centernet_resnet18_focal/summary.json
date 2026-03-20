@@ -1,0 +1,8 @@
+{
+  "best_epoch": 34,
+  "best_val_loss": 0.42558473348617554,
+  "epochs_ran": 42,
+  "early_stop_triggered": true,
+  "early_stop_patience": 8,
+  "early_stop_min_delta": 0.0
+}
