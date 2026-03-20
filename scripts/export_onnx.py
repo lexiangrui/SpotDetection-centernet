@@ -1,16 +1,10 @@
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
 import torch
 from torch import nn
-
-ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
 
 from centernet_spot.config import load_config
 from centernet_spot.model import SpotCenterNet
@@ -42,12 +36,8 @@ def resolve_state_dict(checkpoint: object) -> dict[str, torch.Tensor]:
     if isinstance(checkpoint, dict) and checkpoint:
         first_value = next(iter(checkpoint.values()))
         if isinstance(first_value, torch.Tensor):
-            return checkpoint  # plain state_dict
+            return checkpoint
     raise ValueError("Unsupported checkpoint format. Expected {'model': state_dict, ...} or a plain state_dict.")
-
-
-def default_output_path(checkpoint_path: Path) -> Path:
-    return checkpoint_path.with_suffix(".onnx")
 
 
 def main() -> None:
@@ -74,7 +64,7 @@ def main() -> None:
     dummy_input = torch.randn(args.batch_size, 3, input_h, input_w, dtype=torch.float32)
 
     export_model = OnnxExportWrapper(model)
-    output_path = Path(args.output) if args.output else default_output_path(checkpoint_path)
+    output_path = Path(args.output) if args.output else checkpoint_path.with_suffix(".onnx")
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     dynamic_axes = None

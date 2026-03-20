@@ -1,0 +1,13 @@
+Metadata-Version: 2.4
+Name: centernet-spot
+Version: 0.1.0
+Summary: CenterNet-based spot detection for light spot localization
+Requires-Python: >=3.10
+Requires-Dist: torch>=2.0
+Requires-Dist: torchvision>=0.15
+Requires-Dist: opencv-python>=4.8
+Requires-Dist: numpy>=1.24
+Requires-Dist: pyyaml>=6.0
+Requires-Dist: matplotlib>=3.7
+Provides-Extra: rknn
+Requires-Dist: rknn-toolkit2; extra == "rknn"

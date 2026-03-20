@@ -7,7 +7,7 @@ import torch
 import torch.nn.functional as F
 
 from .losses import transpose_and_gather_feat
-from .transforms import transform_preds
+from .transforms import inverse_transform_points
 
 
 def _nms(heatmap: torch.Tensor, kernel: int = 3) -> torch.Tensor:
@@ -55,7 +55,7 @@ def decode_predictions(
         ],
         axis=1,
     )
-    coords = transform_preds(coords, transform)
+    coords = inverse_transform_points(coords, transform)
 
     detections: List[dict] = []
     for score, (x, y) in zip(scores.tolist(), coords.tolist()):

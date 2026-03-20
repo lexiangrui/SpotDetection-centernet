@@ -5,11 +5,6 @@ import argparse
 from pathlib import Path
 import sys
 
-ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
-
 from rknn.api import RKNN
 
 from centernet_spot.config import load_config
@@ -17,49 +12,17 @@ from centernet_spot.config import load_config
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Convert ONNX to RKNN for CenterNet spot model")
-    parser.add_argument(
-        "--onnx",
-        default="/media/psf/Downloads/光斑定位-centernet/outputs/spot_centernet_resnet18/best_static.onnx",
-        help="Path to input ONNX model",
-    )
-    parser.add_argument(
-        "--output",
-        default="/media/psf/Downloads/gstv/resouces/spot_centernet_resnet18.rknn",
-        help="Path to output RKNN model",
-    )
-    parser.add_argument(
-        "--target-platform",
-        default="rk3576",
-        help="RKNN target platform, e.g. rk3576/rk3588",
-    )
-    parser.add_argument(
-        "--config",
-        default="configs/spot_centernet_resnet18.yaml",
-        help="Project config used to derive RKNN preprocessing parameters",
-    )
-    parser.add_argument(
-        "--input-width",
-        type=int,
-        default=640,
-        help="Model input width",
-    )
-    parser.add_argument(
-        "--input-height",
-        type=int,
-        default=384,
-        help="Model input height",
-    )
-    parser.add_argument(
-        "--quantize",
-        action="store_true",
-        help="Enable quantization build",
-    )
-    parser.add_argument(
-        "--dataset",
-        default=None,
-        help="Dataset txt path used when --quantize is enabled",
-    )
+    parser.add_argument("--onnx", required=True, help="Path to input ONNX model")
+    parser.add_argument("--output", required=True, help="Path to output RKNN model")
+    parser.add_argument("--target-platform", default="rk3576", help="RKNN target platform, e.g. rk3576/rk3588")
+    parser.add_argument("--config", default="configs/spot_centernet.yaml",
+                        help="Project config for RKNN preprocessing parameters")
+    parser.add_argument("--input-width", type=int, default=640)
+    parser.add_argument("--input-height", type=int, default=384)
+    parser.add_argument("--quantize", action="store_true", help="Enable quantization build")
+    parser.add_argument("--dataset", default=None, help="Dataset txt path (required when --quantize)")
     return parser.parse_args()
+
 
 def main() -> int:
     args = parse_args()
@@ -91,9 +54,7 @@ def main() -> int:
             return ret
 
         print(f"[INFO] Loading ONNX: {onnx_path}")
-        ret = rknn.load_onnx(
-            model=str(onnx_path),
-        )
+        ret = rknn.load_onnx(model=str(onnx_path))
         if ret != 0:
             print(f"[ERR] rknn.load_onnx failed: {ret}", file=sys.stderr)
             return ret
@@ -114,8 +75,6 @@ def main() -> int:
             return ret
 
         print(f"[OK] RKNN exported to: {output_path}")
-        print("[INFO] mean_values=[[0.0, 0.0, 0.0]]")
-        print("[INFO] std_values=[[255.0, 255.0, 255.0]]")
         return 0
     finally:
         rknn.release()
