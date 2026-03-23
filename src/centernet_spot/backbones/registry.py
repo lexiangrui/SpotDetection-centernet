@@ -16,7 +16,16 @@ def register_backbone(name: str):
 
 def build_backbone(name: str, **kwargs) -> nn.Module:
     """根据名字构建 backbone，返回的模块需提供 out_channels 属性。"""
+    if name.startswith("timm:"):
+        from .timm_backbone import TimmBackbone
+
+        model_name = name.split(":", 1)[1].strip()
+        if not model_name:
+            raise ValueError("Timm backbone 必须开头是 'timm:'.")
+        return TimmBackbone(model_name=model_name, **kwargs)
+
     if name not in _BACKBONE_REGISTRY:
         available = ", ".join(sorted(_BACKBONE_REGISTRY.keys()))
-        raise ValueError(f"Unknown backbone '{name}'. Available: {available}")
+        extra = " and any timm model via 'timm:<model_name>'"
+        raise ValueError(f"Unknown backbone '{name}'. Available: {available}{extra}")
     return _BACKBONE_REGISTRY[name](**kwargs)

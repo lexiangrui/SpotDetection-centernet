@@ -12,7 +12,7 @@ from centernet_spot.decode import decode_predictions
 from centernet_spot.model import SpotCenterNet
 from centernet_spot.preprocessing import preprocess_image
 from centernet_spot.transforms import build_resize_pad_transform
-from centernet_spot.utils import ensure_dir, get_device, save_json
+from centernet_spot.utils import ensure_dir, get_device, print_preprocessing_summary, save_json
 from centernet_spot.visualization import (
     draw_detections_cross,
     make_heatmap_vis,
@@ -208,6 +208,7 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = load_config(args.config)
+    print_preprocessing_summary(cfg, prefix="infer_preprocessing")
     device = get_device()
     output_dir = ensure_dir(args.output)
 

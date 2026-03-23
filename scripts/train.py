@@ -15,7 +15,7 @@ from centernet_spot.data import SpotDataset
 from centernet_spot.losses import get_heatmap_loss, reg_l1_loss
 from centernet_spot.model import SpotCenterNet
 from centernet_spot.split import discover_labeled_ids, make_train_val_split, write_split_file
-from centernet_spot.utils import ensure_dir, get_device, save_json, set_seed
+from centernet_spot.utils import ensure_dir, get_device, print_preprocessing_summary, save_json, set_seed
 from centernet_spot.visualization import (
     add_panel_title,
     heatmap_to_gray,
@@ -187,6 +187,7 @@ def main() -> None:
     if args.save_dir is not None:
         cfg["train"]["save_dir"] = args.save_dir
     set_seed(int(cfg["seed"]))
+    print_preprocessing_summary(cfg, prefix="train_preprocessing")
     device = get_device()
     save_dir = ensure_dir(cfg["train"]["save_dir"])
     refresh_splits(cfg)

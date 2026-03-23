@@ -9,6 +9,7 @@ import numpy as np
 
 from centernet_spot.config import load_config
 from centernet_spot.preprocessing import preprocess_image_numpy
+from centernet_spot.utils import print_preprocessing_summary
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -24,6 +25,12 @@ def main() -> int:
     parser.add_argument("--input-height", type=int, default=None)
     args = parser.parse_args()
     cfg = load_config(args.config)
+    print_preprocessing_summary(
+        cfg,
+        input_w=args.input_width,
+        input_h=args.input_height,
+        prefix="rknn_dataset_preprocessing",
+    )
 
     photos_dir = Path(args.photos)
     out_dir = Path(args.out_dir)
