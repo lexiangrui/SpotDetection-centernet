@@ -1,7 +1,6 @@
 #include "spot_detector.h"
 
 #include <algorithm>
-#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -45,6 +44,32 @@ int SpotDetector::init(const std::string& model_path, int input_w, int input_h) 
 
     initialized_ = true;
     printf("[INFO] RKNN model loaded: %s\n", model_path.c_str());
+
+    rknn_input_output_num io_num;
+    ret = rknn_query(ctx_, RKNN_QUERY_IN_OUT_NUM, &io_num, sizeof(io_num));
+    if (ret < 0) {
+        fprintf(stderr, "[WARN] rknn_query IN_OUT_NUM failed: %d\n", ret);
+    } else {
+        printf("[INFO] Model I/O: %u inputs, %u outputs\n", io_num.n_input, io_num.n_output);
+        if (io_num.n_output != 2) {
+            fprintf(stderr, "[ERR] Expected 2 outputs (heatmap, reg), got %u\n", io_num.n_output);
+            rknn_destroy(ctx_);
+            initialized_ = false;
+            return -1;
+        }
+        for (uint32_t i = 0; i < io_num.n_output; ++i) {
+            rknn_tensor_attr attr;
+            memset(&attr, 0, sizeof(attr));
+            attr.index = i;
+            ret = rknn_query(ctx_, RKNN_QUERY_OUTPUT_ATTR, &attr, sizeof(attr));
+            if (ret == 0) {
+                printf("[INFO] Output[%u]: name=%s, dims=[%u,%u,%u,%u], type=%d, fmt=%d\n",
+                       i, attr.name, attr.dims[0], attr.dims[1], attr.dims[2], attr.dims[3],
+                       attr.type, attr.fmt);
+            }
+        }
+    }
+
     return 0;
 }
 
@@ -77,7 +102,9 @@ cv::Mat SpotDetector::preprocess(const cv::Mat& image_bgr, ResizePadInfo& info) 
     cv::resize(rgb, resized, cv::Size(info.resized_w, info.resized_h), 0, 0, cv::INTER_LINEAR);
 
     // NHWC float32, normalized with ImageNet mean/std
-    cv::Mat canvas(info.dst_h, info.dst_w, CV_32FC3, cv::Scalar(0.0f, 0.0f, 0.0f));
+    // Padding must match training: normalize(0) = (0/255 - mean) / std = -mean/std
+    cv::Mat canvas(info.dst_h, info.dst_w, CV_32FC3,
+                   cv::Scalar(-MEAN[0] / STD[0], -MEAN[1] / STD[1], -MEAN[2] / STD[2]));
 
     for (int y = 0; y < info.resized_h; ++y) {
         const uint8_t* src_row = resized.ptr<uint8_t>(y);
@@ -92,22 +119,15 @@ cv::Mat SpotDetector::preprocess(const cv::Mat& image_bgr, ResizePadInfo& info) 
     return canvas;
 }
 
-static float sigmoid(float x) {
-    return 1.0f / (1.0f + std::exp(-x));
-}
-
-void SpotDetector::postprocess(const float* heatmap_raw, const float* reg,
+void SpotDetector::postprocess(const float* heatmap_data, const float* reg,
                                int out_h, int out_w,
                                const ResizePadInfo& info,
                                float score_threshold, int topk, int nms_kernel,
                                std::vector<Detection>& detections) {
     const int total = out_h * out_w;
 
-    // Apply sigmoid to heatmap
-    std::vector<float> heatmap(total);
-    for (int i = 0; i < total; ++i) {
-        heatmap[i] = sigmoid(heatmap_raw[i]);
-    }
+    // ONNX/RKNN model already outputs post-sigmoid heatmap, no need to apply again
+    const float* heatmap = heatmap_data;
 
     // Local NMS (max pooling)
     int pad = nms_kernel / 2;

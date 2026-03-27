@@ -19,6 +19,7 @@ def _nms(heatmap: torch.Tensor, kernel: int = 3) -> torch.Tensor:
 
 def _topk(scores: torch.Tensor, k: int) -> tuple[torch.Tensor, ...]:
     batch, cat, height, width = scores.size()
+    k = min(int(k), height * width)
     topk_scores, topk_inds = torch.topk(scores.view(batch, cat, -1), k)
     topk_inds = topk_inds % (height * width)
     topk_ys = (topk_inds // width).int().float()
@@ -32,7 +33,7 @@ def _topk(scores: torch.Tensor, k: int) -> tuple[torch.Tensor, ...]:
     return topk_score, topk_inds, topk_clses, topk_ys, topk_xs
 
 
-def decode_predictions(
+def decode_single_prediction(
     heatmap: torch.Tensor,
     reg: torch.Tensor,
     transform: dict[str, float | int],
@@ -40,6 +41,11 @@ def decode_predictions(
     score_threshold: float = 0.2,
     nms_kernel: int = 3,
 ) -> List[dict]:
+    if heatmap.ndim == 3:
+        heatmap = heatmap.unsqueeze(0)
+    if reg.ndim == 3:
+        reg = reg.unsqueeze(0)
+
     suppressed_heatmap = _nms(heatmap, kernel=nms_kernel)
     scores, inds, _, ys, xs = _topk(suppressed_heatmap, k=topk)
     reg = transpose_and_gather_feat(reg, inds)
@@ -70,3 +76,21 @@ def decode_predictions(
             }
         )
     return detections
+
+
+def decode_predictions(
+    heatmap: torch.Tensor,
+    reg: torch.Tensor,
+    transform: dict[str, float | int],
+    topk: int = 100,
+    score_threshold: float = 0.2,
+    nms_kernel: int = 3,
+) -> List[dict]:
+    return decode_single_prediction(
+        heatmap=heatmap,
+        reg=reg,
+        transform=transform,
+        topk=topk,
+        score_threshold=score_threshold,
+        nms_kernel=nms_kernel,
+    )

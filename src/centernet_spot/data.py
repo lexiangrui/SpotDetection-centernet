@@ -157,6 +157,24 @@ class SpotDataset(Dataset):
         radius = max(diameter_out / 2.0, 0.0)
         return radius, diameter_out
 
+    def _compute_original_spot_diameter(
+        self,
+        size_segments: List[Tuple[Tuple[float, float], Tuple[float, float]]],
+        sample_id: str,
+    ) -> float:
+        if not size_segments:
+            raise ValueError(
+                f"Sample {sample_id} is missing required '{self.spot_size_label}' "
+                f"annotation with shape_type='{self.spot_size_shape_type}'."
+            )
+
+        diameters: List[float] = []
+        for p1, p2 in size_segments:
+            p1_arr = np.asarray(p1, dtype=np.float32)
+            p2_arr = np.asarray(p2, dtype=np.float32)
+            diameters.append(float(np.hypot(*(p2_arr - p1_arr))))
+        return float(np.mean(diameters))
+
     def _augment(self, image: np.ndarray) -> np.ndarray:
         if not self.training:
             return image
@@ -190,10 +208,15 @@ class SpotDataset(Dataset):
         reg = np.zeros((self.max_objects, 2), dtype=np.float32)
         ind = np.zeros((self.max_objects,), dtype=np.int64)
         reg_mask = np.zeros((self.max_objects,), dtype=np.uint8)
+        gt_points = np.zeros((self.max_objects, 2), dtype=np.float32)
+        gt_point_mask = np.zeros((self.max_objects,), dtype=np.uint8)
 
+        spot_diameter_orig = self._compute_original_spot_diameter(size_segments, sample_id)
         radius, spot_diameter = self._compute_gaussian_size(size_segments, output_transform, sample_id)
 
         for obj_idx, (x, y) in enumerate(points[: self.max_objects]):
+            gt_points[obj_idx] = (x, y)
+            gt_point_mask[obj_idx] = 1
             x, y = transform_point((x, y), output_transform)
             if x < 0 or y < 0 or x >= self.out_w or y >= self.out_h:
                 continue
@@ -215,6 +238,7 @@ class SpotDataset(Dataset):
             "output_transform": output_transform,
             "image_width": ann.get("imageWidth", orig_w),
             "image_height": ann.get("imageHeight", orig_h),
+            "spot_diameter_orig": spot_diameter_orig,
             "spot_diameter_out": spot_diameter,
             "gaussian_radius": radius,
             "gaussian_radius_source": "annotation",
@@ -226,5 +250,10 @@ class SpotDataset(Dataset):
             "reg": torch.from_numpy(reg),
             "ind": torch.from_numpy(ind),
             "reg_mask": torch.from_numpy(reg_mask),
+            "gt_points": torch.from_numpy(gt_points),
+            "gt_point_mask": torch.from_numpy(gt_point_mask),
+            "orig_size": torch.tensor([orig_w, orig_h], dtype=torch.int64),
+            "spot_diameter_orig": torch.tensor(spot_diameter_orig, dtype=torch.float32),
+            "sample_id": sample_id,
             "meta": meta,
         }

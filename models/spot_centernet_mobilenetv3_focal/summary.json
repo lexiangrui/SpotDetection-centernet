@@ -1,0 +1,27 @@
+{
+  "best_epoch": 29,
+  "best_eval_val_loss": 0.473449,
+  "best_eval": {
+    "score_threshold": 0.3,
+    "tp": 314,
+    "fp": 4,
+    "fn": 15,
+    "precision": 0.987421,
+    "recall": 0.954407,
+    "f1": 0.970634,
+    "mean_loc_error": 1.627307,
+    "median_loc_error": 1.209552,
+    "p90_loc_error": 2.915728,
+    "pred_count": 318,
+    "gt_count": 329
+  },
+  "best_loss_epoch": 30,
+  "best_loss": 0.457433,
+  "epochs_ran": 41,
+  "early_stop_triggered": true,
+  "early_stop_patience": 12,
+  "selection_min_delta": 0.0001,
+  "scheduler_patience": 4,
+  "scheduler_factor": 0.5,
+  "stop_reason": "early_stop"
+}

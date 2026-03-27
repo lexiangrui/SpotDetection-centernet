@@ -10,10 +10,12 @@ if(NOT DEFINED RKNN_API_PATH)
 endif()
 
 find_path(RKNN_INCLUDE_DIR rknn_api.h
-    PATHS ${RKNN_API_PATH}/include /usr/include /usr/local/include
+    PATHS ${RKNN_API_PATH}/include/rknn ${RKNN_API_PATH}/include
+          /usr/include/rknn /usr/include /usr/local/include/rknn /usr/local/include
 )
 find_library(RKNN_LIBRARY rknnrt
-    PATHS ${RKNN_API_PATH}/lib /usr/lib /usr/local/lib
+    PATHS ${RKNN_API_PATH}/lib64 ${RKNN_API_PATH}/lib
+          /usr/lib64 /usr/lib /usr/local/lib64 /usr/local/lib
 )
 
 if(NOT RKNN_INCLUDE_DIR OR NOT RKNN_LIBRARY)
@@ -40,6 +42,26 @@ target_link_libraries(spot_detector PUBLIC
     ${OpenCV_LIBS}
 )
 
-# ---------- Executable ----------
+# ---------- GStreamer (optional, for streaming) ----------
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(GSTREAMER gstreamer-1.0 gstreamer-app-1.0)
+endif()
+
+# ---------- Single-image CLI ----------
 add_executable(spot_detect src/main.cpp)
 target_link_libraries(spot_detect PRIVATE spot_detector)
+
+# ---------- Real-time streaming ----------
+if(GSTREAMER_FOUND)
+    message(STATUS "GStreamer found — building spot_stream")
+    add_executable(spot_stream src/main_stream.cpp)
+    target_include_directories(spot_stream PRIVATE ${GSTREAMER_INCLUDE_DIRS})
+    target_link_libraries(spot_stream PRIVATE
+        spot_detector
+        ${GSTREAMER_LIBRARIES}
+        pthread
+    )
+else()
+    message(STATUS "GStreamer not found — skipping spot_stream (install gstreamer-1.0 and gstreamer-app-1.0 to enable)")
+endif()

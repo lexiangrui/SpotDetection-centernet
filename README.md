@@ -303,7 +303,7 @@ python scripts/infer.py \
 python scripts/infer.py \
   --config configs/spot_centernet.yaml \
   --checkpoint models/spot_centernet_mobilenetv3_focal/best.pt \
-  --input video/capture.mp4 \
+  --input video/capture4.mp4 \
   --output outputs/infer_video
 ```
 

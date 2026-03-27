@@ -42,8 +42,19 @@ train:
   heatmap_loss_type: focal
   heatmap_loss_weight: 1.0
   offset_loss_weight: 1.0
+  selection_min_delta: 0.0001
+  early_stop_patience: 12
+  scheduler_patience: 4
+  scheduler_factor: 0.5
+
+eval:
+  score_thresholds: [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+  topk: 256
+  nms_kernel: 9
+  match_radius_scale: 0.3
+  min_match_radius: 3.0
 
 infer:
-  score_threshold: 0.6
+  score_threshold: 0.1
   topk: 256
-  nms_kernel: 5
+  nms_kernel: 9
