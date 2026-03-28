@@ -1,6 +1,7 @@
 #include "spot_detector.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -8,9 +9,6 @@
 #include <vector>
 
 #include "opencv2/imgproc.hpp"
-
-constexpr float SpotDetector::MEAN[3];
-constexpr float SpotDetector::STD[3];
 
 static std::vector<uint8_t> load_file(const std::string& path) {
     std::ifstream ifs(path, std::ios::binary | std::ios::ate);
@@ -51,6 +49,17 @@ int SpotDetector::init(const std::string& model_path, int input_w, int input_h) 
         fprintf(stderr, "[WARN] rknn_query IN_OUT_NUM failed: %d\n", ret);
     } else {
         printf("[INFO] Model I/O: %u inputs, %u outputs\n", io_num.n_input, io_num.n_output);
+        if (io_num.n_input == 1) {
+            rknn_tensor_attr attr;
+            memset(&attr, 0, sizeof(attr));
+            attr.index = 0;
+            ret = rknn_query(ctx_, RKNN_QUERY_INPUT_ATTR, &attr, sizeof(attr));
+            if (ret == 0) {
+                printf("[INFO] Input[0]: name=%s, dims=[%u,%u,%u,%u], type=%d, fmt=%d, qnt=%d, zp=%d, scale=%f\n",
+                       attr.name, attr.dims[0], attr.dims[1], attr.dims[2], attr.dims[3],
+                       attr.type, attr.fmt, attr.qnt_type, attr.zp, attr.scale);
+            }
+        }
         if (io_num.n_output != 2) {
             fprintf(stderr, "[ERR] Expected 2 outputs (heatmap, reg), got %u\n", io_num.n_output);
             rknn_destroy(ctx_);
@@ -101,21 +110,8 @@ cv::Mat SpotDetector::preprocess(const cv::Mat& image_bgr, ResizePadInfo& info) 
     cv::Mat resized;
     cv::resize(rgb, resized, cv::Size(info.resized_w, info.resized_h), 0, 0, cv::INTER_LINEAR);
 
-    // NHWC float32, normalized with ImageNet mean/std
-    // Padding must match training: normalize(0) = (0/255 - mean) / std = -mean/std
-    cv::Mat canvas(info.dst_h, info.dst_w, CV_32FC3,
-                   cv::Scalar(-MEAN[0] / STD[0], -MEAN[1] / STD[1], -MEAN[2] / STD[2]));
-
-    for (int y = 0; y < info.resized_h; ++y) {
-        const uint8_t* src_row = resized.ptr<uint8_t>(y);
-        float* dst_row = canvas.ptr<float>(y + info.pad_top) + info.pad_left * 3;
-        for (int x = 0; x < info.resized_w; ++x) {
-            dst_row[x * 3 + 0] = (src_row[x * 3 + 0] / 255.0f - MEAN[0]) / STD[0];
-            dst_row[x * 3 + 1] = (src_row[x * 3 + 1] / 255.0f - MEAN[1]) / STD[1];
-            dst_row[x * 3 + 2] = (src_row[x * 3 + 2] / 255.0f - MEAN[2]) / STD[2];
-        }
-    }
-
+    cv::Mat canvas(info.dst_h, info.dst_w, CV_8UC3, cv::Scalar(0, 0, 0));
+    resized.copyTo(canvas(cv::Rect(info.pad_left, info.pad_top, info.resized_w, info.resized_h)));
     return canvas;
 }
 
@@ -199,9 +195,10 @@ std::vector<Detection> SpotDetector::detect(const cv::Mat& image_bgr,
     rknn_input inputs[1];
     memset(inputs, 0, sizeof(inputs));
     inputs[0].index = 0;
-    inputs[0].type = RKNN_TENSOR_FLOAT32;
+    inputs[0].pass_through = 0;
+    inputs[0].type = RKNN_TENSOR_UINT8;
     inputs[0].fmt = RKNN_TENSOR_NHWC;
-    inputs[0].size = input_w_ * input_h_ * 3 * sizeof(float);
+    inputs[0].size = static_cast<uint32_t>(input.total() * input.elemSize());
     inputs[0].buf = input.data;
 
     int ret = rknn_inputs_set(ctx_, 1, inputs);

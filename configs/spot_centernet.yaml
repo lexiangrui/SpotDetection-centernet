@@ -55,6 +55,6 @@ eval:
   min_match_radius: 3.0
 
 infer:
-  score_threshold: 0.1
+  score_threshold: 0.3
   topk: 256
-  nms_kernel: 9
+  nms_kernel: 5

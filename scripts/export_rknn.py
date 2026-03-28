@@ -8,6 +8,7 @@ import sys
 from rknn.api import RKNN
 
 from centernet_spot.config import load_config
+from centernet_spot.utils import get_input_normalization
 
 
 def parse_args() -> argparse.Namespace:
@@ -18,7 +19,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", default="configs/spot_centernet.yaml",
                         help="Project config for RKNN preprocessing parameters")
     parser.add_argument("--input-width", type=int, default=640)
-    parser.add_argument("--input-height", type=int, default=384)
+    parser.add_argument("--input-height", type=int, default=640)
     parser.add_argument("--quantize", action="store_true", help="Enable quantization build")
     parser.add_argument("--dataset", default=None, help="Dataset txt path (required when --quantize)")
     return parser.parse_args()
@@ -28,7 +29,10 @@ def main() -> int:
     args = parse_args()
     onnx_path = Path(args.onnx)
     output_path = Path(args.output)
-    load_config(args.config)
+    cfg = load_config(args.config)
+    mean, std = get_input_normalization(cfg)
+    mean_values = [[float(v * 255.0) for v in mean.tolist()]]
+    std_values = [[float(v * 255.0) for v in std.tolist()]]
 
     if not onnx_path.exists():
         print(f"[ERR] ONNX not found: {onnx_path}", file=sys.stderr)
@@ -46,8 +50,8 @@ def main() -> int:
         ret = rknn.config(
             target_platform=args.target_platform,
             optimization_level=3,
-            mean_values=[[0.0, 0.0, 0.0]],
-            std_values=[[255.0, 255.0, 255.0]],
+            mean_values=mean_values,
+            std_values=std_values,
         )
         if ret != 0:
             print(f"[ERR] rknn.config failed: {ret}", file=sys.stderr)

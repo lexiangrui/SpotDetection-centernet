@@ -34,9 +34,9 @@ public:
     void release();
 
     std::vector<Detection> detect(const cv::Mat& image_bgr,
-                                  float score_threshold = 0.6f,
+                                  float score_threshold = 0.1f,
                                   int topk = 256,
-                                  int nms_kernel = 5);
+                                  int nms_kernel = 9);
 
 private:
     cv::Mat preprocess(const cv::Mat& image_bgr, ResizePadInfo& info);
@@ -50,7 +50,4 @@ private:
     bool initialized_ = false;
     int input_w_ = 640;
     int input_h_ = 640;
-
-    static constexpr float MEAN[3] = {0.485f, 0.456f, 0.406f};
-    static constexpr float STD[3]  = {0.229f, 0.224f, 0.225f};
 };

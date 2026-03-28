@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 from pathlib import Path
 
 import torch
@@ -75,17 +76,22 @@ def main() -> None:
             "reg": {0: "batch"},
         }
 
+    export_kwargs = {
+        "input_names": ["images"],
+        "output_names": ["heatmap", "reg"],
+        "opset_version": args.opset,
+        "dynamic_axes": dynamic_axes,
+        "do_constant_folding": True,
+    }
+    if "dynamo" in inspect.signature(torch.onnx.export).parameters:
+        export_kwargs["dynamo"] = False
+
     with torch.no_grad():
         torch.onnx.export(
             export_model,
             dummy_input,
             output_path,
-            input_names=["images"],
-            output_names=["heatmap", "reg"],
-            opset_version=args.opset,
-            dynamic_axes=dynamic_axes,
-            do_constant_folding=True,
-            dynamo=False,
+            **export_kwargs,
         )
 
     print(f"exported ONNX to {output_path}")

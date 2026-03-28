@@ -4,10 +4,13 @@
 #include <gst/gst.h>
 #include <gst/app/gstappsrc.h>
 
+#include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <condition_variable>
 #include <csignal>
 #include <cstring>
+#include <exception>
 #include <iostream>
 #include <mutex>
 #include <queue>
@@ -17,6 +20,7 @@
 namespace {
 
 std::atomic<bool> g_running(true);
+std::atomic<bool> g_inference_enabled(true);
 
 template<typename T>
 class BoundedQueue {
@@ -68,6 +72,239 @@ struct PipelineData {
     guint height = 720;
     guint fps    = 30;
 };
+
+struct StreamConfig {
+    std::string model_path = "./model/spot_centernet.rknn";
+    std::string ip = "192.168.99.230";
+    int camera_index = 22;
+    float score_threshold = 0.1f;
+    int topk = 256;
+    int nms_kernel = 9;
+    int frame_w = 1280;
+    int frame_h = 720;
+    int fps = 30;
+    std::string video_mode = "30fps";
+};
+
+bool apply_video_mode(const std::string& mode, int& width, int& height, int& fps, std::string& resolved_name) {
+    if (mode == "30fps" || mode == "720p30" || mode == "1280x720@30") {
+        width = 1280;
+        height = 720;
+        fps = 30;
+        resolved_name = "30fps";
+        return true;
+    }
+    if (mode == "15fps" || mode == "2112x1568@15") {
+        width = 2112;
+        height = 1568;
+        fps = 15;
+        resolved_name = "15fps";
+        return true;
+    }
+    return false;
+}
+
+void print_help(const char* program) {
+    std::cout
+        << "Usage:\n"
+        << "  " << program << " [options]\n\n"
+        << "Options:\n"
+        << "  --model <path>         RKNN model path (default: ./model/spot_centernet.rknn)\n"
+        << "  --ip <addr>            UDP target IP, port is fixed to 5000 (default: 192.168.99.230)\n"
+        << "  --camera <index>       Camera index (default: 22)\n"
+        << "  --threshold <float>    Detection score threshold (default: 0.1)\n"
+        << "  --topk <int>           Top-K points kept before NMS (default: 256)\n"
+        << "  --nms-kernel <int>     NMS kernel size, must be positive odd number (default: 9)\n"
+        << "  --video-mode <mode>    Preset capture mode: 30fps | 15fps (default: 30fps)\n"
+        << "  --width <int>          Custom capture width, use together with --height and --fps\n"
+        << "  --height <int>         Custom capture height, use together with --width and --fps\n"
+        << "  --fps <int>            Custom capture fps, use together with --width and --height\n"
+        << "  --help, -h             Show this help message\n\n"
+        << "Video modes:\n"
+        << "  30fps                  1280x720 @ 30 fps\n"
+        << "  15fps                  2112x1568 @ 15 fps\n\n"
+        << "Examples:\n"
+        << "  " << program << "\n"
+        << "  " << program << " --model ./model/spot_centernet.rknn --ip 192.168.99.230\n"
+        << "  " << program << " --camera 22 --threshold 0.15 --video-mode 15fps\n"
+        << "  " << program << " --width 2112 --height 1568 --fps 15\n\n"
+        << "Runtime:\n"
+        << "  Input q + Enter to toggle inference on/off while keeping the stream alive.\n";
+}
+
+bool parse_int_arg(const std::string& text, const char* option_name, int& value) {
+    try {
+        size_t pos = 0;
+        int parsed = std::stoi(text, &pos);
+        if (pos != text.size()) {
+            std::cerr << "[Args] Invalid integer for " << option_name << ": " << text << std::endl;
+            return false;
+        }
+        value = parsed;
+        return true;
+    } catch (const std::exception&) {
+        std::cerr << "[Args] Invalid integer for " << option_name << ": " << text << std::endl;
+        return false;
+    }
+}
+
+bool parse_float_arg(const std::string& text, const char* option_name, float& value) {
+    try {
+        size_t pos = 0;
+        float parsed = std::stof(text, &pos);
+        if (pos != text.size()) {
+            std::cerr << "[Args] Invalid float for " << option_name << ": " << text << std::endl;
+            return false;
+        }
+        value = parsed;
+        return true;
+    } catch (const std::exception&) {
+        std::cerr << "[Args] Invalid float for " << option_name << ": " << text << std::endl;
+        return false;
+    }
+}
+
+bool require_value(int argc, char* argv[], int& index, const std::string& option, std::string& value) {
+    if (index + 1 >= argc) {
+        std::cerr << "[Args] Missing value for " << option << std::endl;
+        return false;
+    }
+    const std::string next = argv[index + 1];
+    if (next == "-h" || next.rfind("--", 0) == 0) {
+        std::cerr << "[Args] Missing value for " << option << std::endl;
+        return false;
+    }
+    value = next;
+    ++index;
+    return true;
+}
+
+enum class ParseResult {
+    kOk,
+    kHelp,
+    kError,
+};
+
+ParseResult parse_args(int argc, char* argv[], StreamConfig& config) {
+    bool width_set = false;
+    bool height_set = false;
+    bool fps_set = false;
+
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        std::string value;
+
+        if (arg == "--help" || arg == "-h") {
+            print_help(argv[0]);
+            return ParseResult::kHelp;
+        }
+        if (arg == "--model") {
+            if (!require_value(argc, argv, i, arg, value)) return ParseResult::kError;
+            config.model_path = value;
+            continue;
+        }
+        if (arg == "--ip") {
+            if (!require_value(argc, argv, i, arg, value)) return ParseResult::kError;
+            config.ip = value;
+            continue;
+        }
+        if (arg == "--camera") {
+            if (!require_value(argc, argv, i, arg, value) ||
+                !parse_int_arg(value, "--camera", config.camera_index)) {
+                return ParseResult::kError;
+            }
+            continue;
+        }
+        if (arg == "--threshold") {
+            if (!require_value(argc, argv, i, arg, value) ||
+                !parse_float_arg(value, "--threshold", config.score_threshold)) {
+                return ParseResult::kError;
+            }
+            continue;
+        }
+        if (arg == "--topk") {
+            if (!require_value(argc, argv, i, arg, value) ||
+                !parse_int_arg(value, "--topk", config.topk)) {
+                return ParseResult::kError;
+            }
+            continue;
+        }
+        if (arg == "--nms-kernel") {
+            if (!require_value(argc, argv, i, arg, value) ||
+                !parse_int_arg(value, "--nms-kernel", config.nms_kernel)) {
+                return ParseResult::kError;
+            }
+            continue;
+        }
+        if (arg == "--video-mode") {
+            if (!require_value(argc, argv, i, arg, value)) return ParseResult::kError;
+            config.video_mode = value;
+            continue;
+        }
+        if (arg == "--width") {
+            if (!require_value(argc, argv, i, arg, value) ||
+                !parse_int_arg(value, "--width", config.frame_w)) {
+                return ParseResult::kError;
+            }
+            width_set = true;
+            continue;
+        }
+        if (arg == "--height") {
+            if (!require_value(argc, argv, i, arg, value) ||
+                !parse_int_arg(value, "--height", config.frame_h)) {
+                return ParseResult::kError;
+            }
+            height_set = true;
+            continue;
+        }
+        if (arg == "--fps") {
+            if (!require_value(argc, argv, i, arg, value) ||
+                !parse_int_arg(value, "--fps", config.fps)) {
+                return ParseResult::kError;
+            }
+            fps_set = true;
+            continue;
+        }
+
+        std::cerr << "[Args] Unknown argument: " << arg << std::endl;
+        print_help(argv[0]);
+        return ParseResult::kError;
+    }
+
+    if (width_set || height_set || fps_set) {
+        if (!(width_set && height_set && fps_set)) {
+            std::cerr << "[Args] Custom video settings require --width, --height and --fps together" << std::endl;
+            return ParseResult::kError;
+        }
+        config.video_mode = "custom";
+    } else if (!apply_video_mode(config.video_mode, config.frame_w, config.frame_h, config.fps, config.video_mode)) {
+        std::cerr << "[Args] Unsupported --video-mode: " << config.video_mode << std::endl;
+        return ParseResult::kError;
+    }
+
+    if (config.camera_index < 0) {
+        std::cerr << "[Args] --camera must be >= 0" << std::endl;
+        return ParseResult::kError;
+    }
+    if (config.score_threshold < 0.0f) {
+        std::cerr << "[Args] --threshold must be >= 0" << std::endl;
+        return ParseResult::kError;
+    }
+    if (config.topk <= 0) {
+        std::cerr << "[Args] --topk must be > 0" << std::endl;
+        return ParseResult::kError;
+    }
+    if (config.nms_kernel <= 0 || (config.nms_kernel % 2) == 0) {
+        std::cerr << "[Args] --nms-kernel must be a positive odd number" << std::endl;
+        return ParseResult::kError;
+    }
+    if (config.frame_w <= 0 || config.frame_h <= 0 || config.fps <= 0) {
+        std::cerr << "[Args] Video dimensions and fps must be > 0" << std::endl;
+        return ParseResult::kError;
+    }
+
+    return ParseResult::kOk;
+}
 
 bool init_pipeline(PipelineData& pd, const std::string& ip) {
     std::string pipeline_str =
@@ -121,6 +358,18 @@ void on_signal(int) {
     g_running = false;
 }
 
+void control_thread() {
+    std::string line;
+    while (g_running.load() && std::getline(std::cin, line)) {
+        if (line == "q" || line == "Q") {
+            bool enabled = !g_inference_enabled.load();
+            g_inference_enabled = enabled;
+            std::cout << "[Control] Inference " << (enabled ? "enabled" : "disabled")
+                      << " (stream keeps running)" << std::endl;
+        }
+    }
+}
+
 void draw_crosshair(cv::Mat& canvas, int cx, int cy,
                     int size, const cv::Scalar& color, int thickness) {
     cv::line(canvas, cv::Point(cx - size, cy), cv::Point(cx + size, cy),
@@ -129,17 +378,36 @@ void draw_crosshair(cv::Mat& canvas, int cx, int cy,
              color, thickness, cv::LINE_AA);
 }
 
+std::string make_detection_label(const cv::Mat& image, const Detection& det) {
+    int x = std::clamp(static_cast<int>(std::lround(det.x)), 0, image.cols);
+    int y = std::clamp(static_cast<int>(std::lround(static_cast<double>(image.rows) - det.y)), 0, image.rows);
+    char label[96];
+    snprintf(label, sizeof(label), "x=%d y=%d s=%.2f", x, y, det.score);
+    return std::string(label);
+}
+
+void draw_label(cv::Mat& image, const std::string& label, cv::Point origin,
+                double font_scale, int thickness, const cv::Scalar& color) {
+    int baseline = 0;
+    cv::Size text_size = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, font_scale, thickness, &baseline);
+    int x = std::max(0, std::min(origin.x, image.cols - text_size.width - 4));
+    int y = std::max(text_size.height + 4, std::min(origin.y, image.rows - baseline - 4));
+    cv::rectangle(image,
+                  cv::Point(x - 2, y - text_size.height - 2),
+                  cv::Point(x + text_size.width + 2, y + baseline + 2),
+                  cv::Scalar(0, 0, 0),
+                  cv::FILLED);
+    cv::putText(image, label, cv::Point(x, y),
+                cv::FONT_HERSHEY_SIMPLEX, font_scale, color, thickness, cv::LINE_AA);
+}
+
 void draw_detections(cv::Mat& image, const std::vector<Detection>& dets) {
     cv::Scalar color(0, 255, 0);
     for (const auto& det : dets) {
         int cx = static_cast<int>(std::round(det.x));
         int cy = static_cast<int>(std::round(det.y));
         draw_crosshair(image, cx, cy, 6, color, 1);
-        char label[32];
-        snprintf(label, sizeof(label), "%.2f", det.score);
-        cv::putText(image, label,
-                    cv::Point(cx + 8, cy - 4),
-                    cv::FONT_HERSHEY_SIMPLEX, 0.4, color, 1, cv::LINE_AA);
+        draw_label(image, make_detection_label(image, det), cv::Point(cx + 8, cy - 4), 0.4, 1, color);
     }
 }
 
@@ -192,13 +460,18 @@ void detect_thread(BoundedQueue<cv::Mat>& raw_queue,
     size_t frame_count = 0;
     cv::Mat frame;
     while (g_running.load() && raw_queue.pop(frame)) {
-        auto dets = detector.detect(frame, score_threshold, topk, nms_kernel);
-        draw_detections(frame, dets);
+        std::vector<Detection> dets;
+        bool inference_enabled = g_inference_enabled.load();
+        if (inference_enabled) {
+            dets = detector.detect(frame, score_threshold, topk, nms_kernel);
+            draw_detections(frame, dets);
+        }
 
         if (++frame_count % 30 == 0) {
             std::cout << "[Buffer] raw=" << raw_queue.size()
                       << "/3  result=" << result_queue.size()
                       << "/3  spots=" << dets.size()
+                      << "  infer=" << (inference_enabled ? "on" : "off")
                       << std::endl;
         }
 
@@ -268,33 +541,31 @@ void stream_thread(BoundedQueue<cv::Mat>& result_queue, const std::string& ip,
 int main(int argc, char* argv[]) {
     std::signal(SIGINT, on_signal);
     std::signal(SIGTERM, on_signal);
+    g_running = true;
+    g_inference_enabled = true;
 
-    std::string model_path = "./model/spot_centernet.rknn";
-    std::string ip = "192.168.99.230";
-    int camera_index = 22;
-    float score_threshold = 0.6f;
-    int topk = 256;
-    int nms_kernel = 5;
-    int frame_w = 1280;
-    int frame_h = 720;
-    int fps = 30;
+    StreamConfig config;
+    switch (parse_args(argc, argv, config)) {
+    case ParseResult::kOk:
+        break;
+    case ParseResult::kHelp:
+        return 0;
+    case ParseResult::kError:
+        return 1;
+    }
 
-    if (argc >= 2) model_path = argv[1];
-    if (argc >= 3) ip = argv[2];
-    if (argc >= 4) camera_index = std::stoi(argv[3]);
-    if (argc >= 5) score_threshold = std::stof(argv[4]);
-    if (argc >= 6) topk = std::stoi(argv[5]);
-    if (argc >= 7) nms_kernel = std::stoi(argv[6]);
 
     std::cout << "========================================\n"
               << "Real-time Spot Detection Stream\n"
-              << "Model      : " << model_path << "\n"
-              << "Target     : " << ip << ":5000\n"
-              << "Camera     : " << camera_index << "\n"
-              << "Resolution : " << frame_w << "x" << frame_h << "@" << fps << "\n"
-              << "Threshold  : " << score_threshold << "\n"
-              << "TopK       : " << topk << "\n"
-              << "NMS Kernel : " << nms_kernel << "\n"
+              << "Model      : " << config.model_path << "\n"
+              << "Target     : " << config.ip << ":5000\n"
+              << "Camera     : " << config.camera_index << "\n"
+              << "Video Mode : " << config.video_mode << "\n"
+              << "Resolution : " << config.frame_w << "x" << config.frame_h << "@" << config.fps << "\n"
+              << "Threshold  : " << config.score_threshold << "\n"
+              << "TopK       : " << config.topk << "\n"
+              << "NMS Kernel : " << config.nms_kernel << "\n"
+              << "Input q + Enter to toggle inference\n"
               << "Press Ctrl+C to exit\n"
               << "========================================\n" << std::endl;
 
@@ -302,22 +573,26 @@ int main(int argc, char* argv[]) {
     BoundedQueue<cv::Mat> result_queue(3);
 
     std::thread t_capture(capture_thread,
-                          std::ref(raw_queue), camera_index,
-                          frame_w, frame_h, fps);
+                          std::ref(raw_queue), config.camera_index,
+                          config.frame_w, config.frame_h, config.fps);
     std::thread t_detect(detect_thread,
                          std::ref(raw_queue),
                          std::ref(result_queue),
-                         std::cref(model_path),
-                         score_threshold, topk, nms_kernel);
+                         std::cref(config.model_path),
+                         config.score_threshold, config.topk, config.nms_kernel);
     std::thread t_stream(stream_thread,
-                         std::ref(result_queue), std::cref(ip),
-                         frame_w, frame_h, fps);
+                         std::ref(result_queue), std::cref(config.ip),
+                         config.frame_w, config.frame_h, config.fps);
+    std::thread t_control(control_thread);
 
     t_capture.join();
     raw_queue.close();
     t_detect.join();
     result_queue.close();
     t_stream.join();
+    if (t_control.joinable()) {
+        t_control.detach();
+    }
 
     std::cout << "Done" << std::endl;
     return 0;

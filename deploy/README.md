@@ -116,17 +116,24 @@ ninja
 ### 模式二：实时推流 (spot_stream)
 
 ```bash
-./spot_stream [model_path] [target_ip] [camera_index] [score_threshold] [topk] [nms_kernel]
+./spot_stream [--model <path>] [--ip <addr>] [--camera <index>] [--threshold <float>] \
+              [--topk <int>] [--nms-kernel <int>] [--video-mode <30fps|15fps>]
 ```
 
 示例：
 
 ```bash
 # 使用默认参数
-./spot_stream ../model/spot_centernet.rknn 192.168.99.230
+./spot_stream
 
-# 指定摄像头和检测参数
-./spot_stream ../model/spot_centernet.rknn 192.168.1.100 0 0.5 256 5
+# 指定模型和目标 IP
+./spot_stream --model ./model/spot_centernet.rknn --ip 192.168.99.230
+
+# 指定摄像头、检测参数和视频格式
+./spot_stream --camera 22 --threshold 0.1 --topk 256 --nms-kernel 9 --video-mode 15fps
+
+# 查看帮助
+./spot_stream --help
 ```
 
 默认参数：
@@ -137,9 +144,38 @@ ninja
 | model_path      | `./model/spot_centernet.rknn` |
 | target_ip       | `192.168.99.230`              |
 | camera_index    | `22`                          |
-| score_threshold | `0.6`                         |
+| score_threshold | `0.1`                         |
 | topk            | `256`                         |
-| nms_kernel      | `5`                           |
+| nms_kernel      | `9`                           |
+| video_mode      | `30fps`                       |
+
+视频格式选项：
+
+| `video_mode` | 分辨率 | 帧率 |
+| --- | --- | --- |
+| `30fps` | `1280 x 720` | `30` |
+| `15fps` | `2112 x 1568` | `15` |
+
+参数说明：
+
+| 参数 | 说明 |
+| --- | --- |
+| `--model` | `.rknn` 模型路径 |
+| `--ip` | UDP 推流目标 IP，端口固定为 `5000` |
+| `--camera` | 摄像头索引 |
+| `--threshold` | 检测置信度阈值 |
+| `--topk` | NMS 前保留的候选点数量 |
+| `--nms-kernel` | NMS 核大小，要求为正奇数 |
+| `--video-mode` | 预设视频格式，支持 `30fps` 和 `15fps` |
+| `--help` | 打印完整帮助信息 |
+
+也支持自定义采集尺寸：
+
+```bash
+./spot_stream --width 2112 --height 1568 --fps 15
+```
+
+自定义尺寸时，需要同时提供 `--width`、`--height`、`--fps` 三个参数。
 
 
 #### 数据流水线
@@ -158,6 +194,7 @@ ninja
 - 采集线程以 1280×720@30fps 从摄像头读取帧，放入 `raw_queue`
 - 检测线程从 `raw_queue` 取帧，运行 RKNN 模型检测光斑并绘制标记，放入 `result_queue`
 - 推流线程从 `result_queue` 取帧，通过 GStreamer 编码为 H.264 并以 RTP/UDP 发送到目标 IP:5000
+- 运行中输入 `q` 并回车，可切换推理开关；关闭推理时仍继续推流原始视频
 
 #### 接收端查看
 
@@ -221,4 +258,3 @@ CMake 集成：
 add_subdirectory(deploy)
 target_link_libraries(your_target PRIVATE spot_detector)
 ```
-
