@@ -21,6 +21,7 @@ namespace {
 
 std::atomic<bool> g_running(true);
 std::atomic<bool> g_inference_enabled(true);
+std::atomic<bool> g_grid_enabled(true);
 
 template<typename T>
 class BoundedQueue {
@@ -77,28 +78,39 @@ struct StreamConfig {
     std::string model_path = "./model/spot_centernet.rknn";
     std::string ip = "192.168.99.230";
     int camera_index = 22;
-    float score_threshold = 0.1f;
+    float score_threshold = 0.3f;
     int topk = 256;
-    int nms_kernel = 9;
+    int nms_kernel = 5;
+    int grid_step = 100;
     int frame_w = 1280;
     int frame_h = 720;
     int fps = 30;
-    std::string video_mode = "30fps";
+    std::string resolution_preset = "720p";
 };
 
-bool apply_video_mode(const std::string& mode, int& width, int& height, int& fps, std::string& resolved_name) {
-    if (mode == "30fps" || mode == "720p30" || mode == "1280x720@30") {
+bool apply_resolution_preset(const std::string& mode, int& width, int& height, std::string& resolved_name) {
+    if (mode == "720p" || mode == "1280x720") {
         width = 1280;
         height = 720;
-        fps = 30;
-        resolved_name = "30fps";
+        resolved_name = "720p";
         return true;
     }
-    if (mode == "15fps" || mode == "2112x1568@15") {
-        width = 2112;
-        height = 1568;
-        fps = 15;
-        resolved_name = "15fps";
+    if (mode == "1k" || mode == "1080p" || mode == "1920x1080") {
+        width = 1920;
+        height = 1080;
+        resolved_name = "1k";
+        return true;
+    }
+    if (mode == "2k" || mode == "1440p" || mode == "2560x1440") {
+        width = 2560;
+        height = 1440;
+        resolved_name = "2k";
+        return true;
+    }
+    if (mode == "4k" || mode == "2160p" || mode == "3840x2160") {
+        width = 3840;
+        height = 2160;
+        resolved_name = "4k";
         return true;
     }
     return false;
@@ -112,24 +124,30 @@ void print_help(const char* program) {
         << "  --model <path>         RKNN model path (default: ./model/spot_centernet.rknn)\n"
         << "  --ip <addr>            UDP target IP, port is fixed to 5000 (default: 192.168.99.230)\n"
         << "  --camera <index>       Camera index (default: 22)\n"
-        << "  --threshold <float>    Detection score threshold (default: 0.1)\n"
+        << "  --threshold <float>    Detection score threshold (default: 0.3)\n"
         << "  --topk <int>           Top-K points kept before NMS (default: 256)\n"
-        << "  --nms-kernel <int>     NMS kernel size, must be positive odd number (default: 9)\n"
-        << "  --video-mode <mode>    Preset capture mode: 30fps | 15fps (default: 30fps)\n"
-        << "  --width <int>          Custom capture width, use together with --height and --fps\n"
-        << "  --height <int>         Custom capture height, use together with --width and --fps\n"
-        << "  --fps <int>            Custom capture fps, use together with --width and --height\n"
+        << "  --nms-kernel <int>     NMS kernel size, must be positive odd number (default: 5)\n"
+        << "  --grid-step <int>      Coordinate grid spacing in pixels, <= 0 disables (default: 100)\n"
+        << "  --video-mode <mode>    Preset resolution: 720p | 1k | 2k | 4k (default: 720p)\n"
+        << "  --resolution <mode>    Alias of --video-mode\n"
+        << "  --width <int>          Custom capture width, use together with --height\n"
+        << "  --height <int>         Custom capture height, use together with --width\n"
+        << "  --fps <int>            Capture fps (default: 30)\n"
         << "  --help, -h             Show this help message\n\n"
-        << "Video modes:\n"
-        << "  30fps                  1280x720 @ 30 fps\n"
-        << "  15fps                  2112x1568 @ 15 fps\n\n"
+        << "Resolution presets:\n"
+        << "  720p                   1280x720\n"
+        << "  1k                     1920x1080\n"
+        << "  2k                     2560x1440\n"
+        << "  4k                     3840x2160\n\n"
         << "Examples:\n"
         << "  " << program << "\n"
         << "  " << program << " --model ./model/spot_centernet.rknn --ip 192.168.99.230\n"
-        << "  " << program << " --camera 22 --threshold 0.15 --video-mode 15fps\n"
+        << "  " << program << " --camera 22 --threshold 0.3 --video-mode 720p --fps 30\n"
+        << "  " << program << " --video-mode 4k --fps 30 --grid-step 200\n"
         << "  " << program << " --width 2112 --height 1568 --fps 15\n\n"
         << "Runtime:\n"
-        << "  Input q + Enter to toggle inference on/off while keeping the stream alive.\n";
+        << "  Input q + Enter to toggle inference on/off while keeping the stream alive.\n"
+        << "  Input w + Enter to toggle the coordinate grid on/off.\n";
 }
 
 bool parse_int_arg(const std::string& text, const char* option_name, int& value) {
@@ -188,7 +206,6 @@ enum class ParseResult {
 ParseResult parse_args(int argc, char* argv[], StreamConfig& config) {
     bool width_set = false;
     bool height_set = false;
-    bool fps_set = false;
 
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -236,9 +253,16 @@ ParseResult parse_args(int argc, char* argv[], StreamConfig& config) {
             }
             continue;
         }
-        if (arg == "--video-mode") {
+        if (arg == "--grid-step") {
+            if (!require_value(argc, argv, i, arg, value) ||
+                !parse_int_arg(value, "--grid-step", config.grid_step)) {
+                return ParseResult::kError;
+            }
+            continue;
+        }
+        if (arg == "--video-mode" || arg == "--resolution") {
             if (!require_value(argc, argv, i, arg, value)) return ParseResult::kError;
-            config.video_mode = value;
+            config.resolution_preset = value;
             continue;
         }
         if (arg == "--width") {
@@ -262,7 +286,6 @@ ParseResult parse_args(int argc, char* argv[], StreamConfig& config) {
                 !parse_int_arg(value, "--fps", config.fps)) {
                 return ParseResult::kError;
             }
-            fps_set = true;
             continue;
         }
 
@@ -271,14 +294,14 @@ ParseResult parse_args(int argc, char* argv[], StreamConfig& config) {
         return ParseResult::kError;
     }
 
-    if (width_set || height_set || fps_set) {
-        if (!(width_set && height_set && fps_set)) {
-            std::cerr << "[Args] Custom video settings require --width, --height and --fps together" << std::endl;
+    if (width_set || height_set) {
+        if (!(width_set && height_set)) {
+            std::cerr << "[Args] Custom resolution requires --width and --height together" << std::endl;
             return ParseResult::kError;
         }
-        config.video_mode = "custom";
-    } else if (!apply_video_mode(config.video_mode, config.frame_w, config.frame_h, config.fps, config.video_mode)) {
-        std::cerr << "[Args] Unsupported --video-mode: " << config.video_mode << std::endl;
+        config.resolution_preset = "custom";
+    } else if (!apply_resolution_preset(config.resolution_preset, config.frame_w, config.frame_h, config.resolution_preset)) {
+        std::cerr << "[Args] Unsupported --video-mode: " << config.resolution_preset << std::endl;
         return ParseResult::kError;
     }
 
@@ -292,6 +315,10 @@ ParseResult parse_args(int argc, char* argv[], StreamConfig& config) {
     }
     if (config.topk <= 0) {
         std::cerr << "[Args] --topk must be > 0" << std::endl;
+        return ParseResult::kError;
+    }
+    if (config.grid_step < 0) {
+        std::cerr << "[Args] --grid-step must be >= 0" << std::endl;
         return ParseResult::kError;
     }
     if (config.nms_kernel <= 0 || (config.nms_kernel % 2) == 0) {
@@ -366,6 +393,11 @@ void control_thread() {
             g_inference_enabled = enabled;
             std::cout << "[Control] Inference " << (enabled ? "enabled" : "disabled")
                       << " (stream keeps running)" << std::endl;
+        } else if (line == "w" || line == "W") {
+            bool enabled = !g_grid_enabled.load();
+            g_grid_enabled = enabled;
+            std::cout << "[Control] Coordinate grid " << (enabled ? "enabled" : "disabled")
+                      << std::endl;
         }
     }
 }
@@ -411,6 +443,62 @@ void draw_detections(cv::Mat& image, const std::vector<Detection>& dets) {
     }
 }
 
+void draw_coordinate_grid(cv::Mat& image, int step) {
+    if (image.empty() || step <= 0) return;
+
+    const int rows = image.rows;
+    const int cols = image.cols;
+    const int min_side = std::min(rows, cols);
+    const int grid_thickness = std::max(1, static_cast<int>(std::round(min_side * 0.0015)));
+    const int axis_thickness = std::max(2, grid_thickness + 1);
+    const double font_scale = std::max(0.45, min_side / 1800.0);
+    const int text_thickness = std::max(1, grid_thickness);
+
+    const cv::Scalar grid_color(160, 160, 160);
+    const cv::Scalar axis_color(0, 215, 255);
+
+    cv::Mat overlay = image.clone();
+
+    for (int x = 0; x < cols; x += step) {
+        cv::line(overlay, cv::Point(x, 0), cv::Point(x, rows - 1),
+                 grid_color, grid_thickness, cv::LINE_AA);
+    }
+    for (int y_value = 0; y_value < rows; y_value += step) {
+        int y = rows - 1 - y_value;
+        cv::line(overlay, cv::Point(0, y), cv::Point(cols - 1, y),
+                 grid_color, grid_thickness, cv::LINE_AA);
+    }
+
+    cv::addWeighted(overlay, 0.18, image, 0.82, 0.0, image);
+
+    cv::line(image, cv::Point(0, rows - 1), cv::Point(cols - 1, rows - 1),
+             axis_color, axis_thickness, cv::LINE_AA);
+    cv::line(image, cv::Point(0, rows - 1), cv::Point(0, 0),
+             axis_color, axis_thickness, cv::LINE_AA);
+
+    const int x_lines = std::max(1, cols / step);
+    const int y_lines = std::max(1, rows / step);
+    const int x_label_stride = std::max(1, static_cast<int>(std::ceil(static_cast<double>(x_lines) / 10.0)));
+    const int y_label_stride = std::max(1, static_cast<int>(std::ceil(static_cast<double>(y_lines) / 8.0)));
+
+    draw_label(image, "(0,0)", cv::Point(6, rows - 8), font_scale, text_thickness, axis_color);
+    draw_label(image, "X", cv::Point(cols - 20, rows - 8), font_scale, text_thickness, axis_color);
+    draw_label(image, "Y", cv::Point(6, 20), font_scale, text_thickness, axis_color);
+
+    for (int idx = 1, x = step; x < cols; x += step, ++idx) {
+        if ((idx % x_label_stride) != 0 && x + step < cols) continue;
+        draw_label(image, std::to_string(x), cv::Point(x + 4, rows - 8),
+                   font_scale, text_thickness, axis_color);
+    }
+
+    for (int idx = 1, y_value = step; y_value < rows; y_value += step, ++idx) {
+        if ((idx % y_label_stride) != 0 && y_value + step < rows) continue;
+        int y = rows - 1 - y_value;
+        draw_label(image, std::to_string(y_value), cv::Point(6, y - 4),
+                   font_scale, text_thickness, axis_color);
+    }
+}
+
 void capture_thread(BoundedQueue<cv::Mat>& raw_queue, int camera_index,
                     int frame_w, int frame_h, int fps) {
     cv::VideoCapture cap(camera_index);
@@ -446,7 +534,8 @@ void capture_thread(BoundedQueue<cv::Mat>& raw_queue, int camera_index,
 void detect_thread(BoundedQueue<cv::Mat>& raw_queue,
                    BoundedQueue<cv::Mat>& result_queue,
                    const std::string& model_path,
-                   float score_threshold, int topk, int nms_kernel) {
+                   float score_threshold, int topk, int nms_kernel,
+                   int grid_step) {
     SpotDetector detector;
     int ret = detector.init(model_path);
     if (ret != 0) {
@@ -461,6 +550,9 @@ void detect_thread(BoundedQueue<cv::Mat>& raw_queue,
     cv::Mat frame;
     while (g_running.load() && raw_queue.pop(frame)) {
         std::vector<Detection> dets;
+        if (g_grid_enabled.load()) {
+            draw_coordinate_grid(frame, grid_step);
+        }
         bool inference_enabled = g_inference_enabled.load();
         if (inference_enabled) {
             dets = detector.detect(frame, score_threshold, topk, nms_kernel);
@@ -554,18 +646,24 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    g_grid_enabled = (config.grid_step > 0);
 
     std::cout << "========================================\n"
               << "Real-time Spot Detection Stream\n"
               << "Model      : " << config.model_path << "\n"
               << "Target     : " << config.ip << ":5000\n"
               << "Camera     : " << config.camera_index << "\n"
-              << "Video Mode : " << config.video_mode << "\n"
-              << "Resolution : " << config.frame_w << "x" << config.frame_h << "@" << config.fps << "\n"
+              << "Preset     : " << config.resolution_preset << "\n"
+              << "Resolution : " << config.frame_w << "x" << config.frame_h << "\n"
+              << "FPS        : " << config.fps << "\n"
+              << "Grid       : " << (config.grid_step > 0
+                                      ? (std::to_string(config.grid_step) + " px, origin=bottom-left")
+                                      : std::string("off")) << "\n"
               << "Threshold  : " << config.score_threshold << "\n"
               << "TopK       : " << config.topk << "\n"
               << "NMS Kernel : " << config.nms_kernel << "\n"
               << "Input q + Enter to toggle inference\n"
+              << "Input w + Enter to toggle coordinate grid\n"
               << "Press Ctrl+C to exit\n"
               << "========================================\n" << std::endl;
 
@@ -579,7 +677,8 @@ int main(int argc, char* argv[]) {
                          std::ref(raw_queue),
                          std::ref(result_queue),
                          std::cref(config.model_path),
-                         config.score_threshold, config.topk, config.nms_kernel);
+                         config.score_threshold, config.topk, config.nms_kernel,
+                         config.grid_step);
     std::thread t_stream(stream_thread,
                          std::ref(result_queue), std::cref(config.ip),
                          config.frame_w, config.frame_h, config.fps);

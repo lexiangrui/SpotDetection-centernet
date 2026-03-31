@@ -30,7 +30,7 @@ public:
     SpotDetector();
     ~SpotDetector();
 
-    int init(const std::string& model_path, int input_w = 640, int input_h = 640);
+    int init(const std::string& model_path, int input_w = 0, int input_h = 0);
     void release();
 
     std::vector<Detection> detect(const cv::Mat& image_bgr,
@@ -48,6 +48,10 @@ private:
 
     rknn_context ctx_ = 0;
     bool initialized_ = false;
+    bool is_int8_model_ = true;   // true=int8量化模型(输入uint8), false=fp32模型(输入float32)
     int input_w_ = 640;
     int input_h_ = 640;
+    // ImageNet normalization params for fp32 model
+    float mean_[3] = {0.485f, 0.456f, 0.406f};
+    float std_[3]  = {0.229f, 0.224f, 0.225f};
 };

@@ -71,7 +71,7 @@ int main(int argc, char* argv[]) {
     int nms_kernel = (argc > 5) ? std::stoi(argv[5]) : 9;
 
     SpotDetector detector;
-    int ret = detector.init(model_path, 640, 640);
+    int ret = detector.init(model_path);
     if (ret != 0) {
         fprintf(stderr, "[ERR] Failed to init detector\n");
         return 1;

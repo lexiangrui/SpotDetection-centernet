@@ -395,6 +395,7 @@ python scripts/make_rknn_dataset.py \
 ```bash
 python scripts/export_rknn.py \
   --onnx outputs/best.onnx \
+  --checkpoint models/spot_centernet_mobilenetv3_focal/best.pt \
   --output outputs/best.rknn \
   --target-platform rk3576
 ```
@@ -404,11 +405,17 @@ python scripts/export_rknn.py \
 ```bash
 python scripts/export_rknn.py \
   --onnx outputs/best.onnx \
+  --checkpoint models/spot_centernet_mobilenetv3_focal/best.pt \
   --output outputs/best_int8.rknn \
   --target-platform rk3576 \
   --quantize \
   --dataset outputs/rknn_dataset.txt
 ```
+
+说明：
+
+- `export_rknn.py` 需要显式提供 `--checkpoint` 或 `--config`，以确保 RKNN 预处理参数与训练/ONNX 导出一致；推荐优先传 `--checkpoint`
+- 量化数据集应使用 `scripts/make_rknn_dataset.py` 生成的 RGB `uint8` 样本，不要在外部先做 mean/std 归一化，RKNN 会按配置完成预处理
 
 ---
 

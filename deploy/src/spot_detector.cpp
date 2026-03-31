@@ -10,6 +10,17 @@
 
 #include "opencv2/imgproc.hpp"
 
+static bool resolve_tensor_hw(const rknn_tensor_attr& attr, int& width, int& height) {
+    if (attr.fmt == RKNN_TENSOR_NHWC) {
+        height = static_cast<int>(attr.dims[1]);
+        width  = static_cast<int>(attr.dims[2]);
+    } else {
+        height = static_cast<int>(attr.dims[2]);
+        width  = static_cast<int>(attr.dims[3]);
+    }
+    return width > 0 && height > 0;
+}
+
 static std::vector<uint8_t> load_file(const std::string& path) {
     std::ifstream ifs(path, std::ios::binary | std::ios::ate);
     if (!ifs.is_open()) return {};
@@ -18,6 +29,19 @@ static std::vector<uint8_t> load_file(const std::string& path) {
     std::vector<uint8_t> buf(size);
     ifs.read(reinterpret_cast<char*>(buf.data()), size);
     return buf;
+}
+
+// Normalize uint8 NHWC BGR canvas to float32 in-place for fp32 model input.
+static void normalize_canvas_uint8_to_float(const uint8_t* u8_data, float* float_data,
+                                             int pixel_count,
+                                             const float mean[3], const float std[3]) {
+    const float inv_std[3] = {1.0f / std[0], 1.0f / std[1], 1.0f / std[2]};
+    for (int i = 0; i < pixel_count; ++i) {
+        int base = i * 3;
+        float_data[base + 0] = (static_cast<float>(u8_data[base + 0]) / 255.0f - mean[0]) * inv_std[0];
+        float_data[base + 1] = (static_cast<float>(u8_data[base + 1]) / 255.0f - mean[1]) * inv_std[1];
+        float_data[base + 2] = (static_cast<float>(u8_data[base + 2]) / 255.0f - mean[2]) * inv_std[2];
+    }
 }
 
 SpotDetector::SpotDetector() = default;
@@ -55,9 +79,30 @@ int SpotDetector::init(const std::string& model_path, int input_w, int input_h) 
             attr.index = 0;
             ret = rknn_query(ctx_, RKNN_QUERY_INPUT_ATTR, &attr, sizeof(attr));
             if (ret == 0) {
-                printf("[INFO] Input[0]: name=%s, dims=[%u,%u,%u,%u], type=%d, fmt=%d, qnt=%d, zp=%d, scale=%f\n",
+                int model_input_w = 0;
+                int model_input_h = 0;
+                if (resolve_tensor_hw(attr, model_input_w, model_input_h)) {
+                    input_w_ = model_input_w;
+                    input_h_ = model_input_h;
+                }
+
+                // Determine int8 vs fp32 from tensor quantization type
+                // INT8 quantized model: qnt_type != RKNN_TENSOR_QNT_NONE
+                // FP32 / non-quantized model: qnt_type == RKNN_TENSOR_QNT_NONE
+                is_int8_model_ = (attr.qnt_type != RKNN_TENSOR_QNT_NONE);
+
+                printf("[INFO] Input[0]: name=%s, dims=[%u,%u,%u,%u], type=%d, fmt=%d, qnt=%d, zp=%d, scale=%.4f\n",
                        attr.name, attr.dims[0], attr.dims[1], attr.dims[2], attr.dims[3],
                        attr.type, attr.fmt, attr.qnt_type, attr.zp, attr.scale);
+                printf("[INFO] Model type: %s  (qnt_type=%d)\n",
+                       is_int8_model_ ? "INT8 quantized" : "FP32 (non-quantized)",
+                       attr.qnt_type);
+                printf("[INFO] Detector input size: %dx%d\n", input_w_, input_h_);
+            } else if (input_w_ <= 0 || input_h_ <= 0) {
+                fprintf(stderr, "[ERR] Failed to query input tensor and no fallback size provided\n");
+                rknn_destroy(ctx_);
+                initialized_ = false;
+                return -1;
             }
         }
         if (io_num.n_output != 2) {
@@ -77,6 +122,13 @@ int SpotDetector::init(const std::string& model_path, int input_w, int input_h) 
                        attr.type, attr.fmt);
             }
         }
+    }
+
+    if (input_w_ <= 0 || input_h_ <= 0) {
+        fprintf(stderr, "[ERR] Failed to resolve model input size\n");
+        rknn_destroy(ctx_);
+        initialized_ = false;
+        return -1;
     }
 
     return 0;
@@ -190,16 +242,31 @@ std::vector<Detection> SpotDetector::detect(const cv::Mat& image_bgr,
     if (!initialized_) return detections;
 
     ResizePadInfo info{};
-    cv::Mat input = preprocess(image_bgr, info);
+    cv::Mat canvas = preprocess(image_bgr, info);  // canvas: uint8 BGR [H, W, 3], NHWC layout
 
     rknn_input inputs[1];
     memset(inputs, 0, sizeof(inputs));
     inputs[0].index = 0;
     inputs[0].pass_through = 0;
-    inputs[0].type = RKNN_TENSOR_UINT8;
     inputs[0].fmt = RKNN_TENSOR_NHWC;
-    inputs[0].size = static_cast<uint32_t>(input.total() * input.elemSize());
-    inputs[0].buf = input.data;
+
+    if (is_int8_model_) {
+        // INT8 quantized model: input uint8, mean/std normalization fused into NPU graph.
+        inputs[0].type = RKNN_TENSOR_UINT8;
+        inputs[0].size = static_cast<uint32_t>(canvas.total() * canvas.elemSize());
+        inputs[0].buf  = canvas.data;
+    } else {
+        // FP32 non-quantized model: input float32, normalization done on CPU.
+        // Allocate float buffer (reused across calls, minimal allocation cost vs inference cost).
+        static thread_local std::vector<float> float_buf;
+        float_buf.resize(canvas.total() * 3);
+        normalize_canvas_uint8_to_float(canvas.data, float_buf.data(),
+                                        static_cast<int>(canvas.total()),
+                                        mean_, std_);
+        inputs[0].type = RKNN_TENSOR_FLOAT32;
+        inputs[0].size = static_cast<uint32_t>(float_buf.size() * sizeof(float));
+        inputs[0].buf  = float_buf.data();
+    }
 
     int ret = rknn_inputs_set(ctx_, 1, inputs);
     if (ret < 0) {
