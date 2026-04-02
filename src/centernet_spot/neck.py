@@ -6,7 +6,6 @@ from typing import List, Sequence
 import torch
 from torch import nn
 from torch.nn import functional as F
-from torchvision.ops import DeformConv2d
 
 
 def _make_activation(name: str) -> nn.Module:
@@ -113,23 +112,13 @@ class _UpsampleTranspose(nn.Module):
         return self.post(self.up(x))
 
 
-class _ModulatedDeformConvBlock(nn.Module):
+class _DecoderConvBlock(nn.Module):
     def __init__(self, in_channels: int, out_channels: int, *, activation: str = "relu") -> None:
         super().__init__()
-        self.offset_mask = nn.Conv2d(in_channels, 27, kernel_size=3, padding=1)
-        nn.init.constant_(self.offset_mask.weight, 0.0)
-        nn.init.constant_(self.offset_mask.bias, 0.0)
-        self.deform = DeformConv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False)
-        self.bn = nn.BatchNorm2d(out_channels)
-        self.act = _make_activation(activation)
+        self.block = _ConvBNAct(in_channels, out_channels, kernel_size=3, activation=activation)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        offset_mask = self.offset_mask(x)
-        offset = offset_mask[:, :18, :, :]
-        mask = offset_mask[:, 18:, :, :].sigmoid()
-        x = self.deform(x, offset, mask)
-        x = self.bn(x)
-        return self.act(x)
+        return self.block(x)
 
 
 class _FastWeightedFusion(nn.Module):
@@ -160,7 +149,7 @@ class _BiFPNFuseBlock(nn.Module):
 
 
 class ResNetCenterNetDecoder(nn.Module):
-    """ResNet decoder aligned with CenterNet's 3-stage DCN + deconv design."""
+    """ResNet decoder using 3-stage conv + deconv upsampling."""
 
     out_channels: int = 64
 
@@ -173,7 +162,7 @@ class ResNetCenterNetDecoder(nn.Module):
         for out_channels in deconv_channels:
             layers.append(
                 nn.Sequential(
-                    _ModulatedDeformConvBlock(prev_channels, out_channels, activation="relu"),
+                    _DecoderConvBlock(prev_channels, out_channels, activation="relu"),
                     _UpsampleTranspose(out_channels, scale=2, groups=1, activation="relu"),
                 )
             )
@@ -190,9 +179,9 @@ class _IDAUp(nn.Module):
         for index in range(1, len(channels)):
             in_channels = int(channels[index])
             scale = int(up_factors[index])
-            setattr(self, f"proj_{index}", _ModulatedDeformConvBlock(in_channels, out_channels, activation="relu"))
+            setattr(self, f"proj_{index}", _DecoderConvBlock(in_channels, out_channels, activation="relu"))
             setattr(self, f"up_{index}", _UpsampleTranspose(out_channels, scale=scale, groups=out_channels))
-            setattr(self, f"node_{index}", _ModulatedDeformConvBlock(out_channels, out_channels, activation="relu"))
+            setattr(self, f"node_{index}", _DecoderConvBlock(out_channels, out_channels, activation="relu"))
 
     def forward(self, layers: List[torch.Tensor], startp: int, endp: int) -> None:
         for index in range(startp + 1, endp):

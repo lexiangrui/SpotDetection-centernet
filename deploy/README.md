@@ -43,19 +43,19 @@ deploy/
 
 主仓库当前支持三条模型路径：
 
-- `resnet18 + CenterNet-style DCN/deconv decoder`
+- `resnet18 + CenterNet-style conv/deconv decoder`
 - `dla34 + DLAUp/IDAUp decoder`
 - `mobilenetv3_large + BiFPN-style decoder`
 
 其中：
 
-- `resnet18` 和 `dla34` decoder 依赖 `torchvision.ops.DeformConv2d`
-- `mobilenetv3_large` decoder 不依赖 DCN
+- 三条路径当前都只使用标准卷积、深度可分离卷积和反卷积
+- 当前代码已经不再依赖 `torchvision.ops.DeformConv2d`
 
 这会直接影响部署：
 
-- `resnet18/dla34` 在 ONNX/RKNN 导出时更容易失败
-- 如果你的目标是稳定导出到 RKNN，当前代码里更推荐使用 `mobilenetv3_large`
+- 不再存在 `DeformConv2d` 导致的 MPS / ONNX 限制
+- 如果你的目标是更轻量的 RKNN 部署，当前代码里仍更推荐使用 `mobilenetv3_large`
 
 ## 4. 开发机上准备 RKNN 模型
 
@@ -233,5 +233,5 @@ model:
 原因很直接：
 
 - 端侧代码只关心 `heatmap/reg` 和 stride 4
-- `mobilenetv3_large` 路径没有 DCN
-- `resnet18/dla34` 当前更容易卡在 ONNX/RKNN 导出阶段
+- `mobilenetv3_large` 通常更轻量
+- 在板端资源有限时更容易维持速度和内存占用

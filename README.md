@@ -27,9 +27,9 @@
 这条分支当前不是“统一 FPN”结构，而是“多骨干 + 各自 decoder”：
 
 - `resnet18`
-  使用更接近原版 CenterNet 的 `3 stage DCN + deconv` decoder
+  使用 `3 stage conv + deconv` decoder
 - `dla34`
-  使用更接近原版 CenterNet 的 `DLAUp + IDAUp` decoder
+  使用 `DLAUp + IDAUp` decoder
 - `mobilenetv3_large`
   使用轻量 `BiFPN-style` decoder
 
@@ -123,6 +123,12 @@ python -c "from centernet_spot import SpotCenterNet; print('import OK')"
 ## 5. 数据格式
 
 图片放在 `photos/`，标注放在 `labels_raw/`。
+
+使用 Labelme 标注：
+
+```bash
+labelme photos/ --output labels_raw/
+```
 
 每个光斑中心使用 Labelme：
 
@@ -266,19 +272,11 @@ python scripts/export_rknn.py \
 
 当前仓库没有 `scripts/make_rknn_dataset.py`。
 
-### 导出与训练限制
+### 导出与训练说明
 
-这条分支里：
+当前三条 decoder 路径都只使用标准卷积、深度可分离卷积和反卷积，不再依赖 `DeformConv2d`。
 
-- `resnet18` decoder 含 `torchvision.ops.DeformConv2d`
-- `dla34` decoder 也含 `torchvision.ops.DeformConv2d`
-
-这会带来两个实际限制：
-
-- 在 MPS 上训练，`DeformConv2d` 反向通常不可用
-- `resnet18/dla34` 路径导出 ONNX / RKNN 可能失败
-
-如果你的目标是稳定部署，当前代码里更推荐改用：
+如果你的目标是更轻量的部署，当前代码里仍然更推荐改用：
 
 ```yaml
 model:
@@ -286,7 +284,7 @@ model:
   decoder_channels: 96
 ```
 
-因为 `mobilenetv3_large` 这条 decoder 路径不依赖 DCN。
+因为 `mobilenetv3_large` 参数量和计算量通常更友好。
 
 ## 10. 调参建议
 
@@ -296,7 +294,7 @@ model:
 | 误检较多 | 提高 `infer.score_threshold`；增加训练样本 |
 | 相邻光斑粘连 | 减小 `infer.nms_kernel`；检查 `spot_size` 标定线是否过长 |
 | 训练不稳定 | 降低 `train.lr`；增大 `train.batch_size`；若使用 `mobilenetv3_large` 可调整 `decoder_channels` |
-| 部署导出失败 | 优先检查是否在用 `resnet18/dla34` 的 DCN decoder |
+| 部署导出失败 | 先检查当前 checkpoint 和配置文件是否匹配，再检查 ONNX/RKNN 环境版本 |
 
 ## 11. 核心源码说明
 
@@ -324,8 +322,8 @@ model:
 这是当前代码状态决定的：
 
 - 默认训练配置是 `resnet18`
-- 但 `resnet18/dla34` decoder 含 DCN，更容易卡在 MPS 训练和 ONNX/RKNN 导出
-- 如果目标是端侧部署，`mobilenetv3_large` 更稳
+- `mobilenetv3_large` 一般更轻，更适合端侧部署
+- 如果目标是训练速度、模型轻量化和导出便利性，`mobilenetv3_large` 往往更省心
 
 ### Q3：如何新增 backbone
 
