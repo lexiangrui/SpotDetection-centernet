@@ -2,7 +2,7 @@ experiment_name: spot_centernet
 seed: 42
 
 model:
-  backbone: resnet18
+  backbone: dla34
   decoder_channels: 96
   head_channels: 48
   backbone_kwargs:
@@ -38,7 +38,7 @@ train:
   lr: 0.0005
   weight_decay: 0.0001
   log_interval: 5
-  save_dir: models/spot_centernet_resnet18_focal
+  save_dir: models/spot_centernet_dla34_focal
   heatmap_loss_type: focal
   heatmap_loss_weight: 1.0
   offset_loss_weight: 1.0

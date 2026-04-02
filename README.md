@@ -1,237 +1,189 @@
-# 光斑质心定位系统 —— 基于 CenterNet 的点目标检测
+# 光斑质心定位系统
 
 ## 1. 项目简介
 
-本项目实现了一套基于 CenterNet 的单类点目标检测系统，用于从图像或视频中定位光斑中心点坐标。模型通过预测：
+本项目实现了一套基于 CenterNet 的单类点目标检测系统，用于定位图像或视频中的光斑中心。模型输出：
 
-- 1 个通道的热力图 `heatmap`
-- 2 个通道的亚像素偏移 `reg`
+- `heatmap`：1 通道中心点热力图
+- `reg`：2 通道亚像素偏移
 
-再经过局部极大值抑制和 Top-K 解码，输出每个光斑的 `(x, y, score)`。
+解码阶段对热力图做局部极大值抑制和 Top-K 选择，再结合 `reg` 回归原图坐标，输出 `(x, y, score)`。
 
-支持 3 种骨干网络：
+当前代码支持 3 种骨干网络：
 
-- `dla34` — DLA-34
-- `resnet18` — ResNet-18
-- `mobilenetv3_large` — MobileNetV3-Large
+- `resnet18`
+- `dla34`
+- `mobilenetv3_large`
 
-支持 4 种热力图损失函数：
+支持 4 种热力图损失：
 
-- `focal` — Focal Loss（默认）
-- `mse` — 前景 MSE Loss
-- `bce` — 标准 BCE Loss（全图像素）
-- `kl` — KL 散度 Loss
+- `focal`
+- `mse`
+- `bce`
+- `kl`
 
-### 核心特性
+## 2. 当前网络结构
 
-- 单类点目标检测，类别名固定为 `spot`
-- 多骨干网络切换：DLA-34 / ResNet-18 / MobileNetV3-Large
-- FPN 风格多尺度特征融合
-- CenterNet 风格高斯热力图监督
-- 自动适配 `CUDA / MPS / CPU`
-- 图片和视频统一推理入口
-- 三栏可视化输出：原图 | 热力图 | 检测结果
-- ONNX / RKNN 部署导出
+这条分支当前不是“统一 FPN”结构，而是“多骨干 + 各自 decoder”：
 
-### 检测流程
+- `resnet18`
+  使用更接近原版 CenterNet 的 `3 stage DCN + deconv` decoder
+- `dla34`
+  使用更接近原版 CenterNet 的 `DLAUp + IDAUp` decoder
+- `mobilenetv3_large`
+  使用轻量 `BiFPN-style` decoder
+
+对应代码：
+
+- [model.py](/Users/lexiangrui/Desktop/光斑定位-centernet/src/centernet_spot/model.py)
+- [neck.py](/Users/lexiangrui/Desktop/光斑定位-centernet/src/centernet_spot/neck.py)
+- [backbones](/Users/lexiangrui/Desktop/光斑定位-centernet/src/centernet_spot/backbones)
+
+检测流程：
 
 ```text
 输入图像
-  -> resize + pad 到固定输入尺寸
-  -> Backbone (DLA-34 / ResNet-18 / MobileNetV3-Large)
-  -> FPNFusion (多尺度特征融合)
-  -> CenterNet Head
+  -> letterbox (resize + pad)
+  -> backbone (stride 4/8/16/32 多尺度特征)
+  -> decoder (按 backbone 分支实现)
+  -> CenterNet head
        |- heatmap: [B, 1, H/4, W/4]
        |- reg:     [B, 2, H/4, W/4]
   -> sigmoid + local NMS + Top-K
   -> 映射回原图坐标
-  -> 检测结果 (x, y, score)
 ```
 
----
-
-## 2. 项目结构
+## 3. 项目结构
 
 ```text
 光斑定位-centernet/
-├── pyproject.toml                       # Python 包配置
+├── pyproject.toml
 ├── README.md
 ├── configs/
-│   └── spot_centernet.yaml              # 模型/训练/推理配置
+│   └── spot_centernet.yaml
 ├── scripts/
-│   ├── train.py                         # 训练脚本
-│   ├── infer.py                         # 推理脚本（图片/视频）
-│   ├── export_onnx.py                   # ONNX 导出
-│   ├── export_rknn.py                   # RKNN 导出
-│   └── make_rknn_dataset.py             # RKNN 量化数据集制备
+│   ├── train.py
+│   ├── infer.py
+│   ├── export_onnx.py
+│   └── export_rknn.py
 ├── src/centernet_spot/
 │   ├── __init__.py
-│   ├── backbones/                       # 骨干网络
-│   │   ├── __init__.py                  #   注册表 + 自动加载
-│   │   ├── registry.py                  #   backbone 注册/构建机制
-│   │   ├── utils.py                     #   torchvision 权重解析
-│   │   ├── dla34.py                     #   DLA-34
-│   │   ├── resnet18.py                  #   ResNet-18
-│   │   └── mobilenetv3.py              #   MobileNetV3-Large
-│   ├── neck.py                          # FPN 特征融合
-│   ├── head.py                          # CenterNet 检测头
-│   ├── model.py                         # SpotCenterNet 模型组装
-│   ├── config.py                        # YAML 配置加载
-│   ├── data.py                          # 数据集、高斯热力图生成
-│   ├── decode.py                        # NMS + Top-K 解码
-│   ├── losses.py                        # 损失函数（focal/mse/bce/kl + reg_l1）
-│   ├── preprocessing.py                 # 统一预处理（推理/RKNN 共用）
-│   ├── transforms.py                    # resize-pad、坐标正逆变换
-│   ├── split.py                         # 训练/验证集划分
-│   ├── utils.py                         # 种子、设备、归一化、IO 工具
-│   └── visualization.py                 # 可视化（热力图、检测标注、损失曲线）
-├── photos/                              # 图片数据
-├── labels_raw/                          # Labelme 标注文件
-├── splits/                              # 训练/验证划分文件
-├── models/                              # 训练输出的模型权重
-└── outputs/                             # 推理/导出输出
+│   ├── backbones/
+│   │   ├── __init__.py
+│   │   ├── registry.py
+│   │   ├── utils.py
+│   │   ├── dla34.py
+│   │   ├── resnet18.py
+│   │   └── mobilenetv3.py
+│   ├── neck.py
+│   ├── head.py
+│   ├── model.py
+│   ├── config.py
+│   ├── data.py
+│   ├── decode.py
+│   ├── evaluation.py
+│   ├── losses.py
+│   ├── preprocessing.py
+│   ├── transforms.py
+│   ├── split.py
+│   ├── utils.py
+│   └── visualization.py
+├── photos/
+├── labels_raw/
+├── splits/
+├── models/
+└── outputs/
 ```
 
----
-
-## 3. 环境配置
-
-### 3.1 安装
+## 4. 环境配置
 
 推荐 Python `3.10+`。
 
-```bash
-# 克隆项目
-cd 光斑定位-centernet
+安装：
 
-# 安装为可编辑包（推荐）
+```bash
+cd 光斑定位-centernet
 pip install -e .
 ```
 
-这会自动安装所有依赖（torch、torchvision、opencv-python、numpy、pyyaml、matplotlib）。
-
-安装完成后，所有脚本可直接运行，无需额外配置 `PYTHONPATH`。
-
-### 3.2 可选依赖
+可选依赖：
 
 ```bash
-pip install labelme          # 制作点标注
-pip install rknn-toolkit2    # RKNN 导出（仅 ARM 平台）
+pip install labelme
+pip install rknn-toolkit2
 ```
 
-### 3.3 验证环境
+验证：
 
 ```bash
 python -c "import torch; print(torch.__version__); print('cuda=', torch.cuda.is_available()); print('mps=', torch.backends.mps.is_available())"
 python -c "from centernet_spot import SpotCenterNet; print('import OK')"
 ```
 
----
+## 5. 数据格式
 
-## 4. 数据格式
+图片放在 `photos/`，标注放在 `labels_raw/`。
 
-### 4.1 图片目录
+每个光斑中心使用 Labelme：
 
-将图片放在 `photos/` 中，支持 `.jpg`、`.jpeg`、`.png`、`.bmp`。推荐按编号命名：
+- `label = "spot"`
+- `shape_type = "point"`
 
-```text
-photos/
-├── 000001.jpg
-├── 000002.jpg
-└── ...
-```
+每张图还需要一条代表性尺寸线段：
 
-### 4.2 Labelme 标注
+- `label = "spot_size"`
+- `shape_type = "line"`
 
-使用 Labelme 标注：
+`train.py` 每次训练前会自动刷新 `splits/train.txt` 和 `splits/val.txt`。
 
-```bash
-labelme photos/ --output labels_raw/
-```
-
-每个目标点使用：
-
-- `label = "spot"`，`shape_type = "point"`
-
-每张图必须额外画一条代表性尺寸线段：
-
-- `label = "spot_size"`，`shape_type = "line"`
-
-这条线段决定该图监督高斯核的直径。缺失会在数据集加载时报错。
-
-示例标注 JSON：
-
-```json
-{
-  "shapes": [
-    {
-      "label": "spot",
-      "points": [[174.33, 126.66]],
-      "shape_type": "point"
-    },
-    {
-      "label": "spot_size",
-      "points": [[300.0, 120.0], [316.0, 120.0]],
-      "shape_type": "line"
-    }
-  ],
-  "imagePath": "../photos/000008.jpg",
-  "imageHeight": 401,
-  "imageWidth": 644
-}
-```
-
-### 4.3 训练/验证划分
-
-`train.py` 会在每次训练前自动扫描 `labels_raw/`，按 `val_ratio` 重新划分并写入 `splits/train.txt` 和 `splits/val.txt`。
-
----
-
-## 5. 配置文件
+## 6. 配置文件
 
 配置文件：`configs/spot_centernet.yaml`
 
-### 5.1 当前默认配置值
+当前默认值：
 
 | 字段 | 当前值 | 说明 |
 | --- | --- | --- |
-| `model.backbone` | `mobilenetv3_large` | 骨干网络 |
-| `model.neck_channels` | `96` | FPN 通道数 |
+| `model.backbone` | `resnet18` | 当前默认骨干 |
+| `model.decoder_channels` | `96` | decoder 通道数；仅 `mobilenetv3_large` 路径实际使用 |
 | `model.head_channels` | `48` | 检测头通道数 |
-| `model.backbone_kwargs.pretrained` | `true` | 使用 ImageNet 预训练权重 |
-| `model.input_normalization.mean` | `[0.485, 0.456, 0.406]` | ImageNet 均值 |
-| `model.input_normalization.std` | `[0.229, 0.224, 0.225]` | ImageNet 标准差 |
+| `model.backbone_kwargs.pretrained` | `true` | 加载预训练权重 |
+| `model.backbone_kwargs.weights` | `default` | torchvision 默认权重 |
 | `data.input_width` | `640` | 输入宽度 |
 | `data.input_height` | `640` | 输入高度 |
-| `data.down_ratio` | `4` | 下采样率 |
-| `data.max_objects` | `512` | 最大目标数 |
-| `train.batch_size` | `4` | 批次大小 |
-| `train.epochs` | `60` | 训练轮数 |
-| `train.lr` | `0.0005` | 学习率 |
-| `train.heatmap_loss_type` | `focal` | 热力图损失函数 |
-| `infer.score_threshold` | `0.6` | 推理置信度阈值 |
-| `infer.topk` | `256` | Top-K 候选数 |
-| `infer.nms_kernel` | `5` | NMS 核大小 |
+| `data.down_ratio` | `4` | 输出 stride |
+| `train.save_dir` | `models/spot_centernet_resnet18_focal` | 默认训练输出目录 |
+| `train.heatmap_loss_type` | `focal` | 热力图损失 |
+| `infer.score_threshold` | `0.3` | 推理阈值 |
+| `infer.topk` | `256` | Top-K 数量 |
+| `infer.nms_kernel` | `5` | 推理 NMS 核大小 |
 
-### 5.2 输入归一化
+输入输出关系：
 
-当 `model.input_normalization` 存在时，使用配置中指定的 mean/std；否则若使用预训练骨干网络，自动使用 ImageNet 均值和标准差。
+- 输入默认 `640 x 640`
+- 输出默认 `160 x 160`
 
-### 5.3 输入输出分辨率关系
+输入预处理使用 letterbox，也就是等比例缩放加 padding：
 
-默认 `640 × 640` 输入，`down_ratio = 4`，输出分辨率 `160 × 160`。
+- Python 训练/推理见 [transforms.py](/Users/lexiangrui/Desktop/光斑定位-centernet/src/centernet_spot/transforms.py)
+- RKNN 端预处理见 [spot_detector.cpp](/Users/lexiangrui/Desktop/光斑定位-centernet/deploy/src/spot_detector.cpp)
 
----
+归一化逻辑：
 
-## 6. 训练
+- 若 `model.input_normalization` 有配置，直接使用配置值
+- 若没显式配置且骨干使用预训练权重，自动回退到 ImageNet mean/std
 
-### 6.1 基本命令
+对应实现见 [utils.py](/Users/lexiangrui/Desktop/光斑定位-centernet/src/centernet_spot/utils.py)
+
+## 7. 训练
+
+基本命令：
 
 ```bash
 python scripts/train.py --config configs/spot_centernet.yaml
 ```
 
-### 6.2 可选参数
+可选参数：
 
 | 参数 | 说明 |
 | --- | --- |
@@ -240,276 +192,165 @@ python scripts/train.py --config configs/spot_centernet.yaml
 | `--batch-size` | 覆盖批次大小 |
 | `--save-dir` | 覆盖输出目录 |
 
-示例：
+训练输出：
 
-```bash
-python scripts/train.py \
-  --config configs/spot_centernet.yaml \
-  --epochs 200 \
-  --batch-size 8 \
-  --save-dir models/my_experiment
-```
+- `best.pt`
+- `last.pt`
+- `metrics.json`
+- `summary.json`
+- `loss_curve.png`
+- `train_vis/epoch_XXX.jpg`
 
-### 6.3 训练输出
+## 8. 推理
 
-训练目录中会生成：
-
-| 文件 | 说明 |
-| --- | --- |
-| `best.pt` | 最优验证损失对应的模型权重 |
-| `last.pt` | 最后一轮的模型权重 |
-| `metrics.json` | 每轮训练/验证指标记录 |
-| `loss_curve.png` | 训练/验证损失曲线图 |
-| `train_vis/epoch_XXX.jpg` | 每 20 轮保存一次可视化对比 |
-
-### 6.4 切换损失函数
-
-在配置文件中修改 `train.heatmap_loss_type`：
-
-```yaml
-train:
-  heatmap_loss_type: focal   # 可选: focal, mse, bce, kl
-```
-
----
-
-## 7. 推理
-
-### 7.1 基本命令
-
-#### 单张图片
+单张图片：
 
 ```bash
 python scripts/infer.py \
   --config configs/spot_centernet.yaml \
-  --checkpoint models/spot_centernet_mobilenetv3_focal/best.pt \
-  --input video/frames/frame_000001.png
+  --checkpoint models/spot_centernet_resnet18_focal/best.pt \
+  --input photos/000001.jpg \
   --output outputs/infer_single
 ```
 
-#### 整个图片目录
+整个目录：
 
 ```bash
 python scripts/infer.py \
   --config configs/spot_centernet.yaml \
-  --checkpoint models/spot_centernet_mobilenetv3_focal/best.pt \
+  --checkpoint models/spot_centernet_resnet18_focal/best.pt \
   --input photos \
   --output outputs/infer_all
 ```
 
-#### 视频
+视频：
 
 ```bash
 python scripts/infer.py \
   --config configs/spot_centernet.yaml \
-  --checkpoint models/spot_centernet_mobilenetv3_focal/best.pt \
-  --input video/capture4.mp4 \
+  --checkpoint models/spot_centernet_resnet18_focal/best.pt \
+  --input video/capture.mp4 \
   --output outputs/infer_video
 ```
 
-### 7.2 参数说明
+输出：
 
-| 参数 | 必选 | 默认值 | 说明 |
-| --- | --- | --- | --- |
-| `--config` | 否 | `configs/spot_centernet.yaml` | 配置文件 |
-| `--checkpoint` | 是 | — | 模型权重路径 |
-| `--input` | 是 | — | 图片、视频或目录 |
-| `--output` | 否 | `outputs/infer` | 输出目录 |
-| `--score-threshold` | 否 | 配置文件中的值 | 置信度阈值 |
-| `--topk` | 否 | 配置文件中的值 | 候选点数量上限 |
+- 图片：`{name}_vis.jpg` 和 `{name}.json`
+- 视频：`{name}_vis.mp4/.avi` 和 `{name}.json`
 
-### 7.3 输出结果
+## 9. ONNX 与 RKNN 导出
 
-#### 图片输出
-
-每张图片生成 `{name}_vis.jpg`（三栏可视化）和 `{name}.json`：
-
-```json
-{
-  "type": "image",
-  "image": "photos/000008.jpg",
-  "count": 25,
-  "detections": [
-    { "score": 0.9767, "x": 124.52, "y": 223.27, "class_id": 0 }
-  ]
-}
-```
-
-#### 视频输出
-
-每个视频生成 `{name}_vis.mp4`（或 `.avi`）和 `{name}.json`：
-
-```json
-{
-  "type": "video",
-  "video": "video/capture.mp4",
-  "fps": 25.0,
-  "frame_count": 120,
-  "frames": [
-    {
-      "frame_index": 0,
-      "timestamp_ms": 0.0,
-      "count": 18,
-      "detections": [
-        { "score": 0.98, "x": 261.22, "y": 203.26, "class_id": 0 }
-      ]
-    }
-  ]
-}
-```
-
----
-
-## 8. ONNX 与 RKNN 导出
-
-### 8.1 导出 ONNX
+导出 ONNX：
 
 ```bash
 python scripts/export_onnx.py \
-  --checkpoint models/spot_centernet_mobilenetv3_focal/best.pt \
+  --checkpoint models/spot_centernet_resnet18_focal/best.pt \
   --output outputs/best.onnx
 ```
 
-| 参数 | 说明 |
-| --- | --- |
-| `--checkpoint` | 输入 `.pt` 权重 |
-| `--config` | 可选；若 checkpoint 内含配置则自动使用 |
-| `--output` | 输出 `.onnx` 路径 |
-| `--opset` | ONNX opset 版本，默认 `17` |
-| `--batch-size` | 导出 batch size，默认 `1` |
-| `--dynamic-batch` | 启用动态 batch |
-
-### 8.2 生成 RKNN 量化数据集
-
-```bash
-python scripts/make_rknn_dataset.py \
-  --config configs/spot_centernet.yaml \
-  --photos photos \
-  --out-dir outputs/rknn_dataset \
-  --dataset-txt outputs/rknn_dataset.txt \
-  --limit 32
-```
-
-### 8.3 ONNX 转 RKNN
+导出 RKNN：
 
 ```bash
 python scripts/export_rknn.py \
-  --onnx outputs/best.onnx \
-  --checkpoint models/spot_centernet_mobilenetv3_focal/best.pt \
-  --output outputs/best.rknn \
-  --target-platform rk3576
-```
-
-启用量化：
-
-```bash
-python scripts/export_rknn.py \
-  --onnx outputs/best.onnx \
-  --checkpoint models/spot_centernet_mobilenetv3_focal/best.pt \
+  --checkpoint models/spot_centernet_resnet18_focal/best.pt \
   --output outputs/best_int8.rknn \
-  --target-platform rk3576 \
-  --quantize \
-  --dataset outputs/rknn_dataset.txt
+  --quantize int8
 ```
 
-说明：
+`export_rknn.py` 当前会自动：
 
-- `export_rknn.py` 需要显式提供 `--checkpoint` 或 `--config`，以确保 RKNN 预处理参数与训练/ONNX 导出一致；推荐优先传 `--checkpoint`
-- 量化数据集应使用 `scripts/make_rknn_dataset.py` 生成的 RGB `uint8` 样本，不要在外部先做 mean/std 归一化，RKNN 会按配置完成预处理
+- 从 `splits/val.txt` 读取标定图片
+- 做统一预处理
+- 在 `.calib_cache/` 下缓存 `.npy/.txt`
+- 再执行 RKNN 转换
 
----
+当前仓库没有 `scripts/make_rknn_dataset.py`。
 
-## 9. 调参建议
+### 导出与训练限制
+
+这条分支里：
+
+- `resnet18` decoder 含 `torchvision.ops.DeformConv2d`
+- `dla34` decoder 也含 `torchvision.ops.DeformConv2d`
+
+这会带来两个实际限制：
+
+- 在 MPS 上训练，`DeformConv2d` 反向通常不可用
+- `resnet18/dla34` 路径导出 ONNX / RKNN 可能失败
+
+如果你的目标是稳定部署，当前代码里更推荐改用：
+
+```yaml
+model:
+  backbone: mobilenetv3_large
+  decoder_channels: 96
+```
+
+因为 `mobilenetv3_large` 这条 decoder 路径不依赖 DCN。
+
+## 10. 调参建议
 
 | 现象 | 建议 |
 | --- | --- |
 | 漏检较多 | 降低 `infer.score_threshold`；检查 `spot_size` 标定是否偏小 |
 | 误检较多 | 提高 `infer.score_threshold`；增加训练样本 |
 | 相邻光斑粘连 | 减小 `infer.nms_kernel`；检查 `spot_size` 标定线是否过长 |
-| 训练不稳定 | 降低 `train.lr`；增大 `train.batch_size`；减小 `neck_channels` |
-| 显存不足 | 降低 `batch_size` → 降低输入分辨率 → 使用 `resnet18` → 减小通道数 |
+| 训练不稳定 | 降低 `train.lr`；增大 `train.batch_size`；若使用 `mobilenetv3_large` 可调整 `decoder_channels` |
+| 部署导出失败 | 优先检查是否在用 `resnet18/dla34` 的 DCN decoder |
 
----
-
-## 10. 核心源码说明
+## 11. 核心源码说明
 
 | 文件 | 说明 |
 | --- | --- |
-| `backbones/` | 骨干网络注册表与各实现（DLA-34、ResNet-18、MobileNetV3） |
-| `neck.py` | FPN 多尺度特征融合 |
-| `head.py` | CenterNet 检测头（heatmap + reg） |
-| `model.py` | SpotCenterNet 模型组装（backbone → neck → head） |
-| `data.py` | Labelme 标注读取、高斯热力图生成、数据增强 |
-| `losses.py` | 热力图损失（focal/mse/bce/kl）+ 回归 L1 损失 |
-| `decode.py` | 局部 NMS → Top-K → 偏移量修正 → 映射回原图坐标 |
-| `preprocessing.py` | 统一预处理（推理/RKNN 数据集共用） |
-| `transforms.py` | resize-pad 变换、坐标正逆映射 |
-| `visualization.py` | 热力图渲染、检测标注绘制、损失曲线绘制 |
-| `split.py` | 训练/验证集划分与读写 |
-| `utils.py` | 种子设定、设备选择、输入归一化、JSON/目录工具 |
-| `config.py` | YAML 配置加载 |
+| `backbones/` | backbone 注册表与各骨干实现 |
+| `neck.py` | 各 backbone 对应 decoder 实现 |
+| `head.py` | heatmap/reg 检测头 |
+| `model.py` | backbone + decoder + head 组装 |
+| `data.py` | 数据加载与监督目标生成 |
+| `decode.py` | NMS、Top-K、坐标反变换 |
+| `preprocessing.py` | 推理与 RKNN 共享预处理 |
+| `transforms.py` | letterbox 与坐标映射 |
+| `visualization.py` | 可视化与训练曲线导出 |
+| `utils.py` | 设备、归一化、JSON/目录工具 |
 
----
+## 12. 常见问题
 
-## 11. 常见问题
+### Q1：为什么 README 里不再写“统一 FPN”
 
-### Q1：训练时报 `No samples found for split=train`
+因为当前代码不是统一 FPN。当前 [neck.py](/Users/lexiangrui/Desktop/光斑定位-centernet/src/centernet_spot/neck.py) 明确按 `resnet18 / dla34 / mobilenetv3_large` 分支构建不同 decoder。
 
-- `labels_raw/` 为空或标注文件中没有 `label=spot` 且 `shape_type=point` 的标注
-- 确认标注文件数量足够（至少 2 个以上才能划分训练和验证集）
+### Q2：为什么默认配置是 `resnet18`，但部署又推荐 `mobilenetv3_large`
 
-### Q2：推理时没有输出结果
+这是当前代码状态决定的：
 
-- 检查 `--checkpoint` 路径是否正确
-- 检查 `--input` 是否为支持的图片/视频文件或目录
-- 尝试降低 `--score-threshold`
+- 默认训练配置是 `resnet18`
+- 但 `resnet18/dla34` decoder 含 DCN，更容易卡在 MPS 训练和 ONNX/RKNN 导出
+- 如果目标是端侧部署，`mobilenetv3_large` 更稳
 
-### Q3：如何新增骨干网络
+### Q3：如何新增 backbone
 
-1. 在 `src/centernet_spot/backbones/` 下创建新文件
-2. 用 `@register_backbone("name")` 装饰器注册
-3. 类需提供 `out_channels: List[int]` 属性
-4. `forward()` 返回多尺度特征列表 `List[torch.Tensor]`
-5. 在 `backbones/__init__.py` 中导入新模块
+1. 在 [backbones](/Users/lexiangrui/Desktop/光斑定位-centernet/src/centernet_spot/backbones) 下新增实现
+2. 用 `@register_backbone("name")` 注册
+3. 提供 `out_channels`
+4. `forward()` 返回 4 层特征
+5. 在 [neck.py](/Users/lexiangrui/Desktop/光斑定位-centernet/src/centernet_spot/neck.py) 的 `build_decoder()` 中补对应 decoder
 
-然后在配置文件中设置：
-
-```yaml
-model:
-  backbone: name
-```
-
----
-
-## 12. 推荐使用顺序
+## 13. 推荐使用顺序
 
 ```bash
-# 0) 安装
 pip install -e .
 
-# 1) 训练
 python scripts/train.py --config configs/spot_centernet.yaml
 
-# 2) 推理
 python scripts/infer.py \
   --config configs/spot_centernet.yaml \
-  --checkpoint models/spot_centernet_mobilenetv3_focal/best.pt \
+  --checkpoint models/spot_centernet_resnet18_focal/best.pt \
   --input photos \
   --output outputs/infer_results
 
-# 3) 导出 ONNX
 python scripts/export_onnx.py \
-  --checkpoint models/spot_centernet_mobilenetv3_focal/best.pt \
+  --checkpoint models/spot_centernet_resnet18_focal/best.pt \
   --output outputs/best.onnx
-
-# 4) 如需 RKNN，先准备量化数据，再转换
-python scripts/make_rknn_dataset.py \
-  --photos photos \
-  --out-dir outputs/rknn_dataset \
-  --dataset-txt outputs/rknn_dataset.txt
-
-python scripts/export_rknn.py \
-  --onnx outputs/best.onnx \
-  --output outputs/best.rknn \
-  --target-platform rk3576
 ```
+
+如果要直接面向 RKNN 部署，建议先把 `model.backbone` 切到 `mobilenetv3_large` 再训练和导出。
