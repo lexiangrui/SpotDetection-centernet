@@ -131,7 +131,7 @@ ninja
 
 ```bash
 ./spot_stream [--model <path>] [--ip <addr>] [--camera <index>] [--threshold <float>] \
-              [--topk <int>] [--nms-kernel <int>] [--video-mode <720p|1k|2k|4k>] \
+              [--topk <int>] [--nms-kernel <int>] [--video-mode <low|medium|high>] \
               [--fps <int>] [--width <int>] [--height <int>] [--grid-step <int>]
 ```
 
@@ -145,10 +145,13 @@ ninja
 ./spot_stream --model ./model/spot_centernet.rknn --ip 192.168.99.230
 
 # 指定摄像头、检测参数、分辨率预设和帧率
-./spot_stream --camera 22 --threshold 0.1 --topk 256 --nms-kernel 9 --video-mode 1k --fps 30
+./spot_stream --camera 22 --threshold 0.1 --topk 256 --nms-kernel 9 --video-mode low --fps 30
 
-# 开启坐标网格预览，左下角为原点
-./spot_stream --video-mode 4k --fps 30 --grid-step 200
+# 使用板卡原生中分辨率实时流
+./spot_stream --video-mode medium --fps 30 --grid-step 200
+
+# 使用板卡最高原生分辨率实时流
+./spot_stream --video-mode high --fps 15 --grid-step 200
 
 # 查看帮助
 ./spot_stream --help
@@ -165,7 +168,7 @@ ninja
 | score_threshold | `0.1`                         |
 | topk            | `256`                         |
 | nms_kernel      | `9`                           |
-| video_mode      | `1k`                          |
+| video_mode      | `low`                         |
 | fps             | `30`                          |
 | grid_step       | `100`                         |
 
@@ -175,10 +178,9 @@ ninja
 
 | `video_mode` | 分辨率           |
 | ------------ | ------------- |
-| `720p`       | `1280 x 720`  |
-| `1k`         | `1920 x 1080` |
-| `2k`         | `2560 x 1440` |
-| `4k`         | `3840 x 2160` |
+| `low`        | `1920 x 1080` |
+| `medium`     | `2112 x 1568` |
+| `high`       | `4224 x 3136` |
 
 
 参数说明：
@@ -192,7 +194,7 @@ ninja
 | `--threshold`  | 检测置信度阈值                                    |
 | `--topk`       | NMS 前保留的候选点数量                              |
 | `--nms-kernel` | NMS 核大小，要求为正奇数                             |
-| `--video-mode` | 预设分辨率，支持 `720p`、`1k`、`2k` 和 `4k`           |
+| `--video-mode` | 预设分辨率，支持 `low`、`medium` 和 `high`         |
 | `--fps`        | 采集帧率，默认 `30`，不再与分辨率预设绑定                    |
 | `--width`      | 自定义采集宽度，需要与 `--height` 一起提供                |
 | `--height`     | 自定义采集高度，需要与 `--width` 一起提供                 |
@@ -289,4 +291,3 @@ CMake 集成：
 add_subdirectory(deploy)
 target_link_libraries(your_target PRIVATE spot_detector)
 ```
-

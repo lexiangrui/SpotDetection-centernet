@@ -6,16 +6,22 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <cmath>
 #include <condition_variable>
 #include <csignal>
 #include <cstring>
 #include <exception>
+#include <fcntl.h>
 #include <iostream>
+#include <linux/videodev2.h>
 #include <mutex>
 #include <queue>
 #include <string>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <thread>
+#include <unistd.h>
 
 namespace {
 
@@ -82,35 +88,339 @@ struct StreamConfig {
     int topk = 256;
     int nms_kernel = 5;
     int grid_step = 100;
-    int frame_w = 1280;
-    int frame_h = 720;
+    int frame_w = 1920;
+    int frame_h = 1080;
     int fps = 30;
-    std::string resolution_preset = "720p";
+    std::string resolution_preset = "low";
+};
+
+struct V4L2MappedBuffer {
+    void* data = nullptr;
+    size_t length = 0;
+};
+
+int retry_ioctl(int fd, unsigned long request, void* arg) {
+    int ret = 0;
+    do {
+        ret = ioctl(fd, request, arg);
+    } while (ret < 0 && errno == EINTR);
+    return ret;
+}
+
+std::string camera_device_path(int camera_index) {
+    return "/dev/video" + std::to_string(camera_index);
+}
+
+std::string fourcc_to_string(uint32_t fourcc) {
+    char text[5] = {
+        static_cast<char>(fourcc & 0xff),
+        static_cast<char>((fourcc >> 8) & 0xff),
+        static_cast<char>((fourcc >> 16) & 0xff),
+        static_cast<char>((fourcc >> 24) & 0xff),
+        '\0',
+    };
+    return std::string(text);
+}
+
+class V4L2Capture {
+public:
+    ~V4L2Capture() {
+        close_device();
+    }
+
+    bool open_device(int camera_index, int requested_w, int requested_h, int requested_fps) {
+        close_device();
+
+        requested_w_ = requested_w;
+        requested_h_ = requested_h;
+        requested_fps_ = requested_fps;
+        device_path_ = camera_device_path(camera_index);
+
+        fd_ = open(device_path_.c_str(), O_RDWR | O_CLOEXEC);
+        if (fd_ < 0) {
+            std::cerr << "[Capture] Failed to open " << device_path_
+                      << ": " << std::strerror(errno) << std::endl;
+            return false;
+        }
+
+        if (!configure_format() || !configure_fps() || !init_mmap(4) || !start_streaming()) {
+            close_device();
+            return false;
+        }
+        return true;
+    }
+
+    void close_device() {
+        if (fd_ < 0) return;
+
+        if (streaming_) {
+            v4l2_buf_type type = buffer_type_;
+            if (retry_ioctl(fd_, VIDIOC_STREAMOFF, &type) < 0) {
+                std::cerr << "[Capture] VIDIOC_STREAMOFF failed for " << device_path_
+                          << ": " << std::strerror(errno) << std::endl;
+            }
+            streaming_ = false;
+        }
+
+        for (auto& buffer : buffers_) {
+            if (buffer.data && buffer.length > 0) {
+                munmap(buffer.data, buffer.length);
+                buffer.data = nullptr;
+                buffer.length = 0;
+            }
+        }
+        buffers_.clear();
+
+        v4l2_requestbuffers req{};
+        req.count = 0;
+        req.type = buffer_type_;
+        req.memory = V4L2_MEMORY_MMAP;
+        retry_ioctl(fd_, VIDIOC_REQBUFS, &req);
+
+        close(fd_);
+        fd_ = -1;
+    }
+
+    bool read_frame(cv::Mat& bgr_frame) {
+        if (fd_ < 0) return false;
+
+        v4l2_buffer buf{};
+        v4l2_plane planes[VIDEO_MAX_PLANES]{};
+        buf.type = buffer_type_;
+        buf.memory = V4L2_MEMORY_MMAP;
+        buf.length = 1;
+        buf.m.planes = planes;
+
+        if (retry_ioctl(fd_, VIDIOC_DQBUF, &buf) < 0) {
+            std::cerr << "[Capture] VIDIOC_DQBUF failed for " << device_path_
+                      << ": " << std::strerror(errno) << std::endl;
+            return false;
+        }
+
+        bool ok = false;
+        if (buf.index < buffers_.size()) {
+            ok = convert_buffer(buf.index, bgr_frame);
+        } else {
+            std::cerr << "[Capture] Invalid buffer index from " << device_path_
+                      << ": " << buf.index << std::endl;
+        }
+
+        if (!queue_buffer(buf.index)) {
+            return false;
+        }
+        return ok;
+    }
+
+    int width() const { return width_; }
+    int height() const { return height_; }
+    int fps() const { return fps_; }
+    const std::string& device_path() const { return device_path_; }
+    std::string pixel_format_name() const { return fourcc_to_string(pixel_format_); }
+
+private:
+    bool configure_format() {
+        v4l2_capability cap{};
+        if (retry_ioctl(fd_, VIDIOC_QUERYCAP, &cap) < 0) {
+            std::cerr << "[Capture] VIDIOC_QUERYCAP failed for " << device_path_
+                      << ": " << std::strerror(errno) << std::endl;
+            return false;
+        }
+
+        const uint32_t capture_caps = cap.device_caps != 0 ? cap.device_caps : cap.capabilities;
+        if ((capture_caps & V4L2_CAP_VIDEO_CAPTURE_MPLANE) == 0) {
+            std::cerr << "[Capture] Device " << device_path_
+                      << " does not support multi-plane capture" << std::endl;
+            return false;
+        }
+
+        v4l2_format fmt{};
+        fmt.type = buffer_type_;
+        fmt.fmt.pix_mp.width = static_cast<uint32_t>(requested_w_);
+        fmt.fmt.pix_mp.height = static_cast<uint32_t>(requested_h_);
+        fmt.fmt.pix_mp.pixelformat = V4L2_PIX_FMT_UYVY;
+        fmt.fmt.pix_mp.field = V4L2_FIELD_NONE;
+        fmt.fmt.pix_mp.num_planes = 1;
+
+        if (retry_ioctl(fd_, VIDIOC_S_FMT, &fmt) < 0) {
+            std::cerr << "[Capture] VIDIOC_S_FMT failed for " << device_path_
+                      << ": " << std::strerror(errno) << std::endl;
+            return false;
+        }
+
+        width_ = static_cast<int>(fmt.fmt.pix_mp.width);
+        height_ = static_cast<int>(fmt.fmt.pix_mp.height);
+        pixel_format_ = fmt.fmt.pix_mp.pixelformat;
+        bytes_per_line_ = fmt.fmt.pix_mp.plane_fmt[0].bytesperline;
+        if (bytes_per_line_ == 0) {
+            bytes_per_line_ = static_cast<uint32_t>(width_ * 2);
+        }
+
+        if (pixel_format_ != V4L2_PIX_FMT_UYVY && pixel_format_ != V4L2_PIX_FMT_YUYV) {
+            std::cerr << "[Capture] Unsupported pixel format from " << device_path_
+                      << ": " << pixel_format_name() << std::endl;
+            return false;
+        }
+
+        if (width_ != requested_w_ || height_ != requested_h_) {
+            std::cerr << "[Capture] Requested " << requested_w_ << "x" << requested_h_
+                      << " but driver configured " << width_ << "x" << height_
+                      << " on " << device_path_ << std::endl;
+        }
+        return true;
+    }
+
+    bool configure_fps() {
+        fps_ = requested_fps_;
+
+        v4l2_streamparm parm{};
+        parm.type = buffer_type_;
+        parm.parm.capture.timeperframe.numerator = 1;
+        parm.parm.capture.timeperframe.denominator = std::max(requested_fps_, 1);
+
+        if (retry_ioctl(fd_, VIDIOC_S_PARM, &parm) < 0) {
+            std::cerr << "[Capture] VIDIOC_S_PARM unsupported on " << device_path_
+                      << ", keeping driver default fps: " << std::strerror(errno) << std::endl;
+            return true;
+        }
+
+        if (parm.parm.capture.timeperframe.numerator > 0 &&
+            parm.parm.capture.timeperframe.denominator > 0) {
+            fps_ = static_cast<int>(std::lround(
+                static_cast<double>(parm.parm.capture.timeperframe.denominator) /
+                parm.parm.capture.timeperframe.numerator));
+        }
+        return true;
+    }
+
+    bool init_mmap(uint32_t buffer_count) {
+        v4l2_requestbuffers req{};
+        req.count = buffer_count;
+        req.type = buffer_type_;
+        req.memory = V4L2_MEMORY_MMAP;
+
+        if (retry_ioctl(fd_, VIDIOC_REQBUFS, &req) < 0) {
+            std::cerr << "[Capture] VIDIOC_REQBUFS failed for " << device_path_
+                      << ": " << std::strerror(errno) << std::endl;
+            return false;
+        }
+        if (req.count < 2) {
+            std::cerr << "[Capture] Insufficient mmap buffers from " << device_path_
+                      << ": " << req.count << std::endl;
+            return false;
+        }
+
+        buffers_.assign(req.count, {});
+        for (uint32_t i = 0; i < req.count; ++i) {
+            v4l2_buffer buf{};
+            v4l2_plane planes[VIDEO_MAX_PLANES]{};
+            buf.type = buffer_type_;
+            buf.memory = V4L2_MEMORY_MMAP;
+            buf.index = i;
+            buf.length = 1;
+            buf.m.planes = planes;
+
+            if (retry_ioctl(fd_, VIDIOC_QUERYBUF, &buf) < 0) {
+                std::cerr << "[Capture] VIDIOC_QUERYBUF failed for " << device_path_
+                          << ": " << std::strerror(errno) << std::endl;
+                return false;
+            }
+
+            void* data = mmap(nullptr, buf.m.planes[0].length,
+                              PROT_READ | PROT_WRITE, MAP_SHARED,
+                              fd_, buf.m.planes[0].m.mem_offset);
+            if (data == MAP_FAILED) {
+                std::cerr << "[Capture] mmap failed for " << device_path_
+                          << ": " << std::strerror(errno) << std::endl;
+                return false;
+            }
+
+            buffers_[i].data = data;
+            buffers_[i].length = buf.m.planes[0].length;
+        }
+        return true;
+    }
+
+    bool start_streaming() {
+        for (uint32_t i = 0; i < buffers_.size(); ++i) {
+            if (!queue_buffer(i)) return false;
+        }
+
+        v4l2_buf_type type = buffer_type_;
+        if (retry_ioctl(fd_, VIDIOC_STREAMON, &type) < 0) {
+            std::cerr << "[Capture] VIDIOC_STREAMON failed for " << device_path_
+                      << ": " << std::strerror(errno) << std::endl;
+            return false;
+        }
+
+        streaming_ = true;
+        return true;
+    }
+
+    bool queue_buffer(uint32_t index) {
+        v4l2_buffer buf{};
+        v4l2_plane planes[VIDEO_MAX_PLANES]{};
+        buf.type = buffer_type_;
+        buf.memory = V4L2_MEMORY_MMAP;
+        buf.index = index;
+        buf.length = 1;
+        buf.m.planes = planes;
+
+        if (retry_ioctl(fd_, VIDIOC_QBUF, &buf) < 0) {
+            std::cerr << "[Capture] VIDIOC_QBUF failed for " << device_path_
+                      << ": " << std::strerror(errno) << std::endl;
+            return false;
+        }
+        return true;
+    }
+
+    bool convert_buffer(uint32_t index, cv::Mat& bgr_frame) const {
+        if (index >= buffers_.size()) return false;
+
+        const auto& buffer = buffers_[index];
+        cv::Mat yuv(height_, width_, CV_8UC2, buffer.data, bytes_per_line_);
+        if (pixel_format_ == V4L2_PIX_FMT_UYVY) {
+            cv::cvtColor(yuv, bgr_frame, cv::COLOR_YUV2BGR_UYVY);
+            return true;
+        }
+        if (pixel_format_ == V4L2_PIX_FMT_YUYV) {
+            cv::cvtColor(yuv, bgr_frame, cv::COLOR_YUV2BGR_YUY2);
+            return true;
+        }
+        return false;
+    }
+
+    int fd_ = -1;
+    std::string device_path_;
+    int requested_w_ = 0;
+    int requested_h_ = 0;
+    int requested_fps_ = 0;
+    int width_ = 0;
+    int height_ = 0;
+    int fps_ = 0;
+    uint32_t pixel_format_ = V4L2_PIX_FMT_UYVY;
+    uint32_t bytes_per_line_ = 0;
+    v4l2_buf_type buffer_type_ = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+    std::vector<V4L2MappedBuffer> buffers_;
+    bool streaming_ = false;
 };
 
 bool apply_resolution_preset(const std::string& mode, int& width, int& height, std::string& resolved_name) {
-    if (mode == "720p" || mode == "1280x720") {
-        width = 1280;
-        height = 720;
-        resolved_name = "720p";
-        return true;
-    }
-    if (mode == "1k" || mode == "1080p" || mode == "1920x1080") {
+    if (mode == "low" || mode == "1080p" || mode == "1920x1080") {
         width = 1920;
         height = 1080;
-        resolved_name = "1k";
+        resolved_name = "low";
         return true;
     }
-    if (mode == "2k" || mode == "1440p" || mode == "2560x1440") {
-        width = 2560;
-        height = 1440;
-        resolved_name = "2k";
+    if (mode == "medium" || mode == "2112x1568") {
+        width = 2112;
+        height = 1568;
+        resolved_name = "medium";
         return true;
     }
-    if (mode == "4k" || mode == "2160p" || mode == "3840x2160") {
-        width = 3840;
-        height = 2160;
-        resolved_name = "4k";
+    if (mode == "high" || mode == "4224x3136") {
+        width = 4224;
+        height = 3136;
+        resolved_name = "high";
         return true;
     }
     return false;
@@ -128,23 +438,24 @@ void print_help(const char* program) {
         << "  --topk <int>           Top-K points kept before NMS (default: 256)\n"
         << "  --nms-kernel <int>     NMS kernel size, must be positive odd number (default: 5)\n"
         << "  --grid-step <int>      Coordinate grid spacing in pixels, <= 0 disables (default: 100)\n"
-        << "  --video-mode <mode>    Preset resolution: 720p | 1k | 2k | 4k (default: 720p)\n"
+        << "  --video-mode <mode>    Preset resolution: low | medium | high (default: low)\n"
         << "  --resolution <mode>    Alias of --video-mode\n"
         << "  --width <int>          Custom capture width, use together with --height\n"
         << "  --height <int>         Custom capture height, use together with --width\n"
         << "  --fps <int>            Capture fps (default: 30)\n"
         << "  --help, -h             Show this help message\n\n"
         << "Resolution presets:\n"
-        << "  720p                   1280x720\n"
-        << "  1k                     1920x1080\n"
-        << "  2k                     2560x1440\n"
-        << "  4k                     3840x2160\n\n"
+        << "  low                    1920x1080\n"
+        << "  medium                 2112x1568\n"
+        << "  high                   4224x3136\n\n"
         << "Examples:\n"
         << "  " << program << "\n"
         << "  " << program << " --model ./model/spot_centernet.rknn --ip 192.168.99.230\n"
-        << "  " << program << " --camera 22 --threshold 0.3 --video-mode 720p --fps 30\n"
-        << "  " << program << " --video-mode 4k --fps 30 --grid-step 200\n"
-        << "  " << program << " --width 2112 --height 1568 --fps 15\n\n"
+        << "  " << program << " --camera 22 --threshold 0.3 --video-mode low --fps 30\n"
+        << "  " << program << " --video-mode medium --fps 30 --grid-step 200\n"
+        << "  " << program << " --video-mode high --fps 15 --grid-step 200\n"
+        << "  " << program << " --width 2112 --height 1568 --fps 15\n"
+        << "  " << program << " --width 4224 --height 3136 --fps 15\n\n"
         << "Runtime:\n"
         << "  Input q + Enter to toggle inference on/off while keeping the stream alive.\n"
         << "  Input w + Enter to toggle the coordinate grid on/off.\n";
@@ -362,6 +673,8 @@ bool init_pipeline(PipelineData& pd, const std::string& ip) {
     g_object_set(pd.appsrc,
                  "stream-type", GST_APP_STREAM_TYPE_STREAM,
                  "format",      GST_FORMAT_TIME,
+                 "is-live",     TRUE,
+                 "block",       TRUE,
                  nullptr);
 
     gst_element_set_state(pd.pipeline, GST_STATE_PLAYING);
@@ -501,32 +814,43 @@ void draw_coordinate_grid(cv::Mat& image, int step) {
 
 void capture_thread(BoundedQueue<cv::Mat>& raw_queue, int camera_index,
                     int frame_w, int frame_h, int fps) {
-    cv::VideoCapture cap(camera_index);
-    if (!cap.isOpened()) {
-        std::cerr << "[Capture] Failed to open camera index " << camera_index << std::endl;
+    V4L2Capture capture;
+    if (!capture.open_device(camera_index, frame_w, frame_h, fps)) {
         g_running = false;
         raw_queue.close();
         return;
     }
 
-    cap.set(cv::CAP_PROP_FRAME_WIDTH, frame_w);
-    cap.set(cv::CAP_PROP_FRAME_HEIGHT, frame_h);
-    cap.set(cv::CAP_PROP_FPS, fps);
+    std::cout << "[Capture] Started, device=" << capture.device_path()
+              << " requested=" << frame_w << "x" << frame_h << "@" << fps
+              << " actual=" << capture.width() << "x" << capture.height()
+              << " fmt=" << capture.pixel_format_name()
+              << " fps=" << capture.fps() << std::endl;
 
-    std::cout << "[Capture] Started, camera=" << camera_index
-              << " " << frame_w << "x" << frame_h << "@" << fps << std::endl;
+    bool warned_resize = false;
 
     while (g_running.load()) {
         cv::Mat frame;
-        cap >> frame;
-        if (frame.empty()) {
-            std::cerr << "[Capture] Empty frame, stopping" << std::endl;
+        if (!capture.read_frame(frame) || frame.empty()) {
+            std::cerr << "[Capture] Failed to read frame, stopping" << std::endl;
             g_running = false;
             break;
         }
+
+        if (frame.cols != frame_w || frame.rows != frame_h) {
+            if (!warned_resize) {
+                std::cerr << "[Capture] Driver output " << frame.cols << "x" << frame.rows
+                          << " differs from requested " << frame_w << "x" << frame_h
+                          << ", resizing in software" << std::endl;
+                warned_resize = true;
+            }
+            cv::resize(frame, frame, cv::Size(frame_w, frame_h), 0, 0, cv::INTER_LINEAR);
+        }
+
         raw_queue.push(std::move(frame));
     }
 
+    capture.close_device();
     raw_queue.close();
     std::cout << "[Capture] Stopped" << std::endl;
 }

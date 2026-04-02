@@ -283,7 +283,7 @@ train:
 python scripts/infer.py \
   --config configs/spot_centernet.yaml \
   --checkpoint models/spot_centernet_mobilenetv3_focal/best.pt \
-  --input photos/000008.jpg \
+  --input video/frames/frame_000001.png
   --output outputs/infer_single
 ```
 

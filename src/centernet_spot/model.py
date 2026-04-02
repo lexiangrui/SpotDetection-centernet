@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-from typing import List
-
 import torch
 from torch import nn
 
 from .backbones import build_backbone
 from .head import CenterNetHead
-from .neck import FPNFusion
+from .neck import build_decoder
 
 
 class SpotCenterNet(nn.Module):
@@ -15,20 +13,21 @@ class SpotCenterNet(nn.Module):
         super().__init__()
         model_cfg = cfg.get("model", {}) if cfg else {}
         backbone_name = str(model_cfg.get("backbone", "dla34"))
-        neck_channels = int(model_cfg.get("neck_channels", 128))
+        decoder_channels = int(model_cfg.get("decoder_channels", model_cfg.get("neck_channels", 128)))
         head_channels = int(model_cfg.get("head_channels", 64))
         backbone_kwargs = dict(model_cfg.get("backbone_kwargs", {}))
 
         self.backbone = build_backbone(backbone_name, **backbone_kwargs)
-        fpn_in_channels: List[int] = self.backbone.out_channels  # type: ignore[attr-defined]
+        backbone_channels = self.backbone.out_channels  # type: ignore[attr-defined]
+        self.decoder = build_decoder(backbone_name, backbone_channels, decoder_channels)
+        feat_channels = int(self.decoder.out_channels)  # type: ignore[attr-defined]
 
-        self.neck = FPNFusion(fpn_in_channels, neck_channels)
-        self.hm_head = CenterNetHead(neck_channels, 1, head_channels, final_bias=-2.19)
-        self.reg_head = CenterNetHead(neck_channels, 2, head_channels)
+        self.hm_head = CenterNetHead(feat_channels, 1, head_channels, final_bias=-2.19)
+        self.reg_head = CenterNetHead(feat_channels, 2, head_channels)
 
     def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         features = self.backbone(x)
-        feat = self.neck(features)
+        feat = self.decoder(features)
         heatmap = self.hm_head(feat).sigmoid()
         return {
             "heatmap": heatmap,
