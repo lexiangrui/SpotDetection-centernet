@@ -3,27 +3,22 @@ from __future__ import annotations
 import torch
 from torch import nn
 
-from .backbones import build_backbone
+from .backbones import ResNet18Backbone
 from .head import CenterNetHead
-from .neck import build_decoder
+from .neck import ResNetCenterNetDecoder
+
+HEAD_CHANNELS = 48
 
 
 class SpotCenterNet(nn.Module):
-    def __init__(self, cfg: dict | None = None) -> None:
+    def __init__(self, *, load_pretrained_backbone: bool = True) -> None:
         super().__init__()
-        model_cfg = cfg.get("model", {}) if cfg else {}
-        backbone_name = str(model_cfg.get("backbone", "dla34"))
-        decoder_channels = int(model_cfg.get("decoder_channels", model_cfg.get("neck_channels", 128)))
-        head_channels = int(model_cfg.get("head_channels", 64))
-        backbone_kwargs = dict(model_cfg.get("backbone_kwargs", {}))
+        self.backbone = ResNet18Backbone(load_pretrained=load_pretrained_backbone)
+        self.decoder = ResNetCenterNetDecoder(self.backbone.out_channels)
+        feat_channels = int(self.decoder.out_channels)
 
-        self.backbone = build_backbone(backbone_name, **backbone_kwargs)
-        backbone_channels = self.backbone.out_channels  # type: ignore[attr-defined]
-        self.decoder = build_decoder(backbone_name, backbone_channels, decoder_channels)
-        feat_channels = int(self.decoder.out_channels)  # type: ignore[attr-defined]
-
-        self.hm_head = CenterNetHead(feat_channels, 1, head_channels, final_bias=-2.19)
-        self.reg_head = CenterNetHead(feat_channels, 2, head_channels)
+        self.hm_head = CenterNetHead(feat_channels, 1, HEAD_CHANNELS, final_bias=-2.19)
+        self.reg_head = CenterNetHead(feat_channels, 2, HEAD_CHANNELS)
 
     def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         features = self.backbone(x)

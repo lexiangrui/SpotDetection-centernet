@@ -9,11 +9,7 @@
 
 解码阶段对热力图做局部极大值抑制和 Top-K 选择，再结合 `reg` 回归原图坐标，输出 `(x, y, score)`。
 
-当前代码支持 3 种骨干网络：
-
-- `resnet18`
-- `dla34`
-- `mobilenetv3_large`
+当前代码固定使用 `resnet18` backbone。
 
 支持 4 种热力图损失：
 
@@ -24,14 +20,7 @@
 
 ## 2. 当前网络结构
 
-这条分支当前不是“统一 FPN”结构，而是“多骨干 + 各自 decoder”：
-
-- `resnet18`
-  使用 `3 stage conv + deconv` decoder
-- `dla34`
-  使用 `DLAUp + IDAUp` decoder
-- `mobilenetv3_large`
-  使用轻量 `BiFPN-style` decoder
+这条分支当前是固定的 `resnet18 + 3 stage conv + deconv decoder` 结构。
 
 对应代码：
 
@@ -44,8 +33,8 @@
 ```text
 输入图像
   -> letterbox (resize + pad)
-  -> backbone (stride 4/8/16/32 多尺度特征)
-  -> decoder (按 backbone 分支实现)
+  -> resnet18 backbone (stride 4/8/16/32 多尺度特征)
+  -> decoder
   -> CenterNet head
        |- heatmap: [B, 1, H/4, W/4]
        |- reg:     [B, 2, H/4, W/4]
@@ -70,11 +59,7 @@
 │   ├── __init__.py
 │   ├── backbones/
 │   │   ├── __init__.py
-│   │   ├── registry.py
-│   │   ├── utils.py
-│   │   ├── dla34.py
-│   │   ├── resnet18.py
-│   │   └── mobilenetv3.py
+│   │   └── resnet18.py
 │   ├── neck.py
 │   ├── head.py
 │   ├── model.py
@@ -150,11 +135,6 @@ labelme photos/ --output labels_raw/
 
 | 字段 | 当前值 | 说明 |
 | --- | --- | --- |
-| `model.backbone` | `resnet18` | 当前默认骨干 |
-| `model.decoder_channels` | `96` | decoder 通道数；仅 `mobilenetv3_large` 路径实际使用 |
-| `model.head_channels` | `48` | 检测头通道数 |
-| `model.backbone_kwargs.pretrained` | `true` | 加载预训练权重 |
-| `model.backbone_kwargs.weights` | `default` | torchvision 默认权重 |
 | `data.input_width` | `640` | 输入宽度 |
 | `data.input_height` | `640` | 输入高度 |
 | `data.down_ratio` | `4` | 输出 stride |
@@ -176,8 +156,7 @@ labelme photos/ --output labels_raw/
 
 归一化逻辑：
 
-- 若 `model.input_normalization` 有配置，直接使用配置值
-- 若没显式配置且骨干使用预训练权重，自动回退到 ImageNet mean/std
+- 当前项目固定使用 ImageNet mean/std
 
 对应实现见 [utils.py](/Users/lexiangrui/Desktop/光斑定位-centernet/src/centernet_spot/utils.py)
 
@@ -202,10 +181,35 @@ python scripts/train.py --config configs/spot_centernet.yaml
 
 - `best.pt`
 - `last.pt`
+- `best_loss.pt`
+- `train.log`
+- `metrics.jsonl`
+- `metrics.csv`
 - `metrics.json`
 - `summary.json`
+- `run_context.json`
 - `loss_curve.png`
+- `tensorboard/events.out.tfevents.*`
 - `train_vis/epoch_XXX.jpg`
+
+当前训练监控方式：
+
+- 终端使用 `tqdm` 实时显示训练、验证、评估进度与吞吐。
+- `train.log` 保存完整文本日志，适合长期跑实验时回看。
+- `metrics.jsonl` / `metrics.csv` 保存逐轮结构化指标，方便 pandas、Excel 或自定义脚本分析。
+- TensorBoard 记录 `train/val loss`、`AP`、`F1`、`fitness`、`precision`、`recall`、学习率和样本可视化。
+
+启动 TensorBoard：
+
+```bash
+tensorboard --logdir models/spot_centernet_resnet18_focal/tensorboard
+```
+
+当前训练控制策略：
+
+- `ReduceLROnPlateau` 监控 `val_loss`，比直接盯 `F1` 更平滑，降学习率更稳定。
+- `best.pt` 与 early stopping 依据 `fitness = 0.7 * AP + 0.3 * F1` 选优。
+- `AP` 用整条 PR 曲线衡量排序质量，避免只盯单阈值 `F1` 带来的波动。
 
 ## 8. 推理
 
@@ -274,17 +278,7 @@ python scripts/export_rknn.py \
 
 ### 导出与训练说明
 
-当前三条 decoder 路径都只使用标准卷积、深度可分离卷积和反卷积，不再依赖 `DeformConv2d`。
-
-如果你的目标是更轻量的部署，当前代码里仍然更推荐改用：
-
-```yaml
-model:
-  backbone: mobilenetv3_large
-  decoder_channels: 96
-```
-
-因为 `mobilenetv3_large` 参数量和计算量通常更友好。
+当前项目已经固定为 `resnet18 backbone + 3-stage deconv decoder`，不再保留其他 backbone 分支和对应 decoder。
 
 ## 10. 调参建议
 
@@ -293,15 +287,15 @@ model:
 | 漏检较多 | 降低 `infer.score_threshold`；检查 `spot_size` 标定是否偏小 |
 | 误检较多 | 提高 `infer.score_threshold`；增加训练样本 |
 | 相邻光斑粘连 | 减小 `infer.nms_kernel`；检查 `spot_size` 标定线是否过长 |
-| 训练不稳定 | 降低 `train.lr`；增大 `train.batch_size`；若使用 `mobilenetv3_large` 可调整 `decoder_channels` |
+| 训练不稳定 | 降低 `train.lr`；增大 `train.batch_size` |
 | 部署导出失败 | 先检查当前 checkpoint 和配置文件是否匹配，再检查 ONNX/RKNN 环境版本 |
 
 ## 11. 核心源码说明
 
 | 文件 | 说明 |
 | --- | --- |
-| `backbones/` | backbone 注册表与各骨干实现 |
-| `neck.py` | 各 backbone 对应 decoder 实现 |
+| `backbones/resnet18.py` | 固定使用的 ResNet-18 backbone |
+| `neck.py` | ResNet-18 对应 decoder 实现 |
 | `head.py` | heatmap/reg 检测头 |
 | `model.py` | backbone + decoder + head 组装 |
 | `data.py` | 数据加载与监督目标生成 |
@@ -313,25 +307,17 @@ model:
 
 ## 12. 常见问题
 
-### Q1：为什么 README 里不再写“统一 FPN”
+### Q1：为什么配置文件里没有 `model.backbone` 这些参数了
 
-因为当前代码不是统一 FPN。当前 [neck.py](/Users/lexiangrui/Desktop/光斑定位-centernet/src/centernet_spot/neck.py) 明确按 `resnet18 / dla34 / mobilenetv3_large` 分支构建不同 decoder。
+因为当前项目已经固定为 `resnet18`，对应的 decoder 和归一化也一起写死了，不再保留多 backbone 选择。
 
-### Q2：为什么默认配置是 `resnet18`，但部署又推荐 `mobilenetv3_large`
+### Q2：为什么导出/推理时不再加载预训练 backbone
 
-这是当前代码状态决定的：
+因为导出和推理都会先加载完整 checkpoint，backbone 预训练初始化在这两个阶段是多余的，还可能触发不必要的权重下载。
 
-- 默认训练配置是 `resnet18`
-- `mobilenetv3_large` 一般更轻，更适合端侧部署
-- 如果目标是训练速度、模型轻量化和导出便利性，`mobilenetv3_large` 往往更省心
+### Q3：如果后面还要换 backbone 怎么办
 
-### Q3：如何新增 backbone
-
-1. 在 [backbones](/Users/lexiangrui/Desktop/光斑定位-centernet/src/centernet_spot/backbones) 下新增实现
-2. 用 `@register_backbone("name")` 注册
-3. 提供 `out_channels`
-4. `forward()` 返回 4 层特征
-5. 在 [neck.py](/Users/lexiangrui/Desktop/光斑定位-centernet/src/centernet_spot/neck.py) 的 `build_decoder()` 中补对应 decoder
+当前代码已经刻意去掉了通用注册表和分支逻辑；如果后面要换 backbone，需要直接改 [backbones/resnet18.py](/Users/lexiangrui/Desktop/光斑定位-centernet/src/centernet_spot/backbones/resnet18.py)、[neck.py](/Users/lexiangrui/Desktop/光斑定位-centernet/src/centernet_spot/neck.py) 和 [model.py](/Users/lexiangrui/Desktop/光斑定位-centernet/src/centernet_spot/model.py)。
 
 ## 13. 推荐使用顺序
 
@@ -350,5 +336,3 @@ python scripts/export_onnx.py \
   --checkpoint models/spot_centernet_resnet18_focal/best.pt \
   --output outputs/best.onnx
 ```
-
-如果要直接面向 RKNN 部署，建议先把 `model.backbone` 切到 `mobilenetv3_large` 再训练和导出。

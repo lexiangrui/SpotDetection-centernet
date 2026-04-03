@@ -41,21 +41,19 @@ deploy/
 
 ## 3. 当前代码和部署的关系
 
-主仓库当前支持三条模型路径：
+主仓库当前固定使用：
 
 - `resnet18 + CenterNet-style conv/deconv decoder`
-- `dla34 + DLAUp/IDAUp decoder`
-- `mobilenetv3_large + BiFPN-style decoder`
 
-其中：
+并且：
 
-- 三条路径当前都只使用标准卷积、深度可分离卷积和反卷积
+- 当前路径只使用标准卷积和反卷积
 - 当前代码已经不再依赖 `torchvision.ops.DeformConv2d`
 
 这会直接影响部署：
 
 - 不再存在 `DeformConv2d` 导致的 MPS / ONNX 限制
-- 如果你的目标是更轻量的 RKNN 部署，当前代码里仍更推荐使用 `mobilenetv3_large`
+- 导出的 ONNX/RKNN 都以当前这条 `resnet18` 路径为准
 
 ## 4. 开发机上准备 RKNN 模型
 
@@ -67,11 +65,9 @@ pip install rknn-toolkit2 --extra-index-url https://download.rockchip.com/rknn/r
 
 ### 4.1 导出 ONNX
 
-如果你当前训练的是部署友好的 `mobilenetv3_large` 路径：
-
 ```bash
 python scripts/export_onnx.py \
-  --checkpoint models/spot_centernet_mobilenetv3_focal/best.pt \
+  --checkpoint models/spot_centernet_resnet18_focal/best.pt \
   --output outputs/best.onnx
 ```
 
@@ -79,7 +75,7 @@ python scripts/export_onnx.py \
 
 ```bash
 python scripts/export_rknn.py \
-  --checkpoint models/spot_centernet_mobilenetv3_focal/best.pt \
+  --checkpoint models/spot_centernet_resnet18_focal/best.pt \
   --output deploy/model/spot_centernet_int8.rknn \
   --quantize int8
 ```
@@ -88,7 +84,7 @@ python scripts/export_rknn.py \
 
 ```bash
 python scripts/export_rknn.py \
-  --checkpoint models/spot_centernet_mobilenetv3_focal/best.pt \
+  --checkpoint models/spot_centernet_resnet18_focal/best.pt \
   --output deploy/model/spot_centernet_fp32.rknn \
   --quantize fp32
 ```
@@ -222,16 +218,4 @@ ninja
 
 ## 9. 使用建议
 
-如果你的目标是“这条分支直接导出 RKNN 并部署”，优先建议：
-
-```yaml
-model:
-  backbone: mobilenetv3_large
-  decoder_channels: 96
-```
-
-原因很直接：
-
-- 端侧代码只关心 `heatmap/reg` 和 stride 4
-- `mobilenetv3_large` 通常更轻量
-- 在板端资源有限时更容易维持速度和内存占用
+如果你的目标是“这条分支直接导出 RKNN 并部署”，当前仓库默认就是这条固定的 `resnet18` 路径，训练、导出和板端推理都应保持与同一份 checkpoint 对齐。

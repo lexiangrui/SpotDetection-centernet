@@ -212,7 +212,7 @@ def main() -> None:
     output_dir = ensure_dir(args.output)
 
     checkpoint = torch.load(args.checkpoint, map_location=device)
-    model = SpotCenterNet(cfg).to(device)
+    model = SpotCenterNet(load_pretrained_backbone=False).to(device)
     model.load_state_dict(checkpoint["model"])
     model.eval()
 

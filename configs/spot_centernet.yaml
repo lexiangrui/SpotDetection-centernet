@@ -1,17 +1,6 @@
 experiment_name: spot_centernet
 seed: 42
 
-model:
-  backbone: mobilenetv3_large
-  decoder_channels: 96
-  head_channels: 48
-  backbone_kwargs:
-    pretrained: true
-    weights: default
-  input_normalization:
-    mean: [0.485, 0.456, 0.406]
-    std: [0.229, 0.224, 0.225]
-
 data:
   root: .
   image_dir: photos
@@ -38,11 +27,14 @@ train:
   lr: 0.0005
   weight_decay: 0.0001
   log_interval: 5
-  save_dir: models/spot_centernet_mobilenetv3_focal
+  vis_interval: 5
+  save_dir: models/spot_centernet_resnet18_focal
   heatmap_loss_type: focal
   heatmap_loss_weight: 1.0
   offset_loss_weight: 1.0
   selection_min_delta: 0.0001
+  selection_ap_weight: 0.7
+  selection_f1_weight: 0.3
   early_stop_patience: 12
   scheduler_patience: 4
   scheduler_factor: 0.5

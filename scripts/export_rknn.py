@@ -6,15 +6,15 @@
 
 用法:
     # INT8 量化（推荐，NPU 推理速度最快）:
-    python scripts/export_rknn.py --checkpoint models/spot_centernet_mobilenetv3_focal/best.pt \
+    python scripts/export_rknn.py --checkpoint models/spot_centernet_resnet18_focal/best.pt \
         --output deploy/model/spot_centernet_int8.rknn --quantize int8
 
     # 不量化（FP32，精度最高）:
-    python scripts/export_rknn.py --checkpoint models/spot_centernet_mobilenetv3_focal/best.pt \
+    python scripts/export_rknn.py --checkpoint models/spot_centernet_resnet18_focal/best.pt \
         --output deploy/model/spot_centernet_fp32.rknn --quantize fp32
 
     # 复用已有 ONNX:
-    python scripts/export_rknn.py --onnx models/spot_centernet_mobilenetv3_focal/best.onnx \
+    python scripts/export_rknn.py --onnx models/spot_centernet_resnet18_focal/best.onnx \
         --output deploy/model/spot_centernet_int8.rknn
 """
 
@@ -76,7 +76,7 @@ def export_raw_onnx(checkpoint_path: Path, output_onnx: Path, cfg: dict,
         if isinstance(first_val, dict):
             state_dict = first_val
 
-    model = SpotCenterNet(resolved_cfg)
+    model = SpotCenterNet(load_pretrained_backbone=False)
     model.load_state_dict(state_dict)
     model.eval()
 

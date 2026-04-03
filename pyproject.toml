@@ -10,6 +10,8 @@ requires-python = ">=3.10"
 dependencies = [
     "torch>=2.0",
     "torchvision>=0.15",
+    "tensorboard>=2.14",
+    "tqdm>=4.66",
     "opencv-python>=4.8",
     "numpy>=1.24",
     "pyyaml>=6.0",

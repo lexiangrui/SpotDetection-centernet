@@ -56,7 +56,7 @@ def main() -> None:
     cfg = resolve_config(args.config, checkpoint)
     state_dict = resolve_state_dict(checkpoint)
 
-    model = SpotCenterNet(cfg)
+    model = SpotCenterNet(load_pretrained_backbone=False)
     model.load_state_dict(state_dict)
     model.eval()
 
