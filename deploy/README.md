@@ -27,12 +27,13 @@ deploy/
 当前 [spot_detector.cpp](/Users/lexiangrui/Desktop/光斑定位-centernet/deploy/src/spot_detector.cpp) 对模型输出有明确假设：
 
 - 只有 2 个输出：`heatmap`、`reg`
-- 输出 stride 固定为 `4`
-- 当输入是 `640 x 640` 时，输出默认为 `160 x 160`
+- 当前开发端模型 stride 仍为 `4`
+- C++ 端会优先读取 RKNN 实际输入/输出张量尺寸，不再把 `640 x 640 / 160 x 160` 写死
+- 当前主配置 [spot_centernet.yaml](/Users/lexiangrui/Desktop/光斑定位-centernet/configs/spot_centernet.yaml) 对应输入是 `640 x 480`，输出是 `160 x 120`
 
-也就是说，端侧代码目前适配的是标准 CenterNet 风格 `H/4 x W/4` 输出，不适配全分辨率输出模型。
+也就是说，端侧代码目前适配的是标准 CenterNet 风格 `H/4 x W/4` 的 `heatmap + reg` 输出；如果后续改成其他输出头或全分辨率输出，仍需要同步改 C++ 后处理。
 
-预处理使用 letterbox：
+预处理使用 RGB letterbox：
 
 - 等比例缩放
 - padding 到模型输入尺寸
@@ -189,9 +190,9 @@ ninja
 | `model_path` | `./model/spot_centernet.rknn` |
 | `target_ip` | `192.168.99.230` |
 | `camera_index` | `22` |
-| `score_threshold` | `0.1` |
+| `score_threshold` | `0.3` |
 | `topk` | `256` |
-| `nms_kernel` | `9` |
+| `nms_kernel` | `5` |
 | `video_mode` | `low` |
 | `fps` | `30` |
 | `grid_step` | `100` |
@@ -210,8 +211,8 @@ ninja
 
 - 输入：RGB letterbox 到固定尺寸
 - 输出：
-  - `heatmap [1,1,160,160]`
-  - `reg [1,2,160,160]`
+  - 当前主配置下 `heatmap [1,1,120,160]`
+  - 当前主配置下 `reg [1,2,120,160]`
 - 坐标语义：CenterNet `heatmap + reg`
 
 如果你改了这些任一项，`deploy/src/spot_detector.cpp` 也要一起改。

@@ -34,9 +34,9 @@ public:
     void release();
 
     std::vector<Detection> detect(const cv::Mat& image_bgr,
-                                  float score_threshold = 0.1f,
+                                  float score_threshold = 0.3f,
                                   int topk = 256,
-                                  int nms_kernel = 9);
+                                  int nms_kernel = 5);
 
 private:
     cv::Mat preprocess(const cv::Mat& image_bgr, ResizePadInfo& info);
@@ -50,7 +50,12 @@ private:
     bool initialized_ = false;
     bool is_int8_model_ = true;   // true=int8量化模型(输入uint8), false=fp32模型(输入float32)
     int input_w_ = 640;
-    int input_h_ = 640;
+    int input_h_ = 480;
+    int output_w_ = 0;
+    int output_h_ = 0;
+    int heatmap_output_index_ = 0;
+    int reg_output_index_ = 1;
+    bool reg_output_is_nhwc_ = false;
     // ImageNet normalization params for fp32 model
     float mean_[3] = {0.485f, 0.456f, 0.406f};
     float std_[3]  = {0.229f, 0.224f, 0.225f};

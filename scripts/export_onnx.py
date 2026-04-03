@@ -87,6 +87,7 @@ def main() -> None:
         export_kwargs["dynamo"] = False
 
     with torch.no_grad():
+        sample_outputs = model(dummy_input)
         torch.onnx.export(
             export_model,
             dummy_input,
@@ -96,7 +97,7 @@ def main() -> None:
 
     print(f"exported ONNX to {output_path}")
     print(f"input: images[{args.batch_size}, 3, {input_h}, {input_w}]")
-    print("outputs: heatmap, reg")
+    print(f"outputs: heatmap{tuple(sample_outputs['heatmap'].shape)}, reg{tuple(sample_outputs['reg'].shape)}")
 
 
 if __name__ == "__main__":

@@ -66,9 +66,9 @@ int main(int argc, char* argv[]) {
 
     const std::string model_path = argv[1];
     const std::string image_path = argv[2];
-    float score_threshold = (argc > 3) ? std::stof(argv[3]) : 0.1f;
+    float score_threshold = (argc > 3) ? std::stof(argv[3]) : 0.3f;
     int topk = (argc > 4) ? std::stoi(argv[4]) : 256;
-    int nms_kernel = (argc > 5) ? std::stoi(argv[5]) : 9;
+    int nms_kernel = (argc > 5) ? std::stoi(argv[5]) : 5;
 
     SpotDetector detector;
     int ret = detector.init(model_path);

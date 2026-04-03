@@ -1,5 +1,5 @@
 {
-  "version": "5.11.4",
+  "version": "5.11.2",
   "flags": {},
   "shapes": [
     {
@@ -516,6 +516,20 @@
         [
           2395.8709677419356,
           2371.2258064516127
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "point",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "spot",
+      "points": [
+        [
+          889.272727272727,
+          1463.4545454545455
         ]
       ],
       "group_id": null,

@@ -21,6 +21,15 @@ static bool resolve_tensor_hw(const rknn_tensor_attr& attr, int& width, int& hei
     return width > 0 && height > 0;
 }
 
+static bool resolve_tensor_channels(const rknn_tensor_attr& attr, int& channels) {
+    if (attr.fmt == RKNN_TENSOR_NHWC) {
+        channels = static_cast<int>(attr.dims[3]);
+    } else {
+        channels = static_cast<int>(attr.dims[1]);
+    }
+    return channels > 0;
+}
+
 static std::vector<uint8_t> load_file(const std::string& path) {
     std::ifstream ifs(path, std::ios::binary | std::ios::ate);
     if (!ifs.is_open()) return {};
@@ -31,7 +40,7 @@ static std::vector<uint8_t> load_file(const std::string& path) {
     return buf;
 }
 
-// Normalize uint8 NHWC BGR canvas to float32 in-place for fp32 model input.
+// Normalize uint8 NHWC RGB canvas to float32 in-place for fp32 model input.
 static void normalize_canvas_uint8_to_float(const uint8_t* u8_data, float* float_data,
                                              int pixel_count,
                                              const float mean[3], const float std[3]) {
@@ -51,6 +60,11 @@ SpotDetector::~SpotDetector() { release(); }
 int SpotDetector::init(const std::string& model_path, int input_w, int input_h) {
     input_w_ = input_w;
     input_h_ = input_h;
+    output_w_ = 0;
+    output_h_ = 0;
+    heatmap_output_index_ = 0;
+    reg_output_index_ = 1;
+    reg_output_is_nhwc_ = false;
 
     auto model_data = load_file(model_path);
     if (model_data.empty()) {
@@ -117,6 +131,31 @@ int SpotDetector::init(const std::string& model_path, int input_w, int input_h) 
             attr.index = i;
             ret = rknn_query(ctx_, RKNN_QUERY_OUTPUT_ATTR, &attr, sizeof(attr));
             if (ret == 0) {
+                int out_w = 0;
+                int out_h = 0;
+                int out_c = 0;
+                resolve_tensor_hw(attr, out_w, out_h);
+                resolve_tensor_channels(attr, out_c);
+
+                if (out_c == 1) {
+                    heatmap_output_index_ = static_cast<int>(i);
+                    output_w_ = out_w;
+                    output_h_ = out_h;
+                } else if (out_c == 2) {
+                    reg_output_index_ = static_cast<int>(i);
+                    reg_output_is_nhwc_ = (attr.fmt == RKNN_TENSOR_NHWC);
+                    if (output_w_ == 0 || output_h_ == 0) {
+                        output_w_ = out_w;
+                        output_h_ = out_h;
+                    } else if (output_w_ != out_w || output_h_ != out_h) {
+                        fprintf(stderr,
+                                "[ERR] Output shape mismatch: heatmap=%dx%d, reg=%dx%d\n",
+                                output_w_, output_h_, out_w, out_h);
+                        rknn_destroy(ctx_);
+                        initialized_ = false;
+                        return -1;
+                    }
+                }
                 printf("[INFO] Output[%u]: name=%s, dims=[%u,%u,%u,%u], type=%d, fmt=%d\n",
                        i, attr.name, attr.dims[0], attr.dims[1], attr.dims[2], attr.dims[3],
                        attr.type, attr.fmt);
@@ -130,6 +169,18 @@ int SpotDetector::init(const std::string& model_path, int input_w, int input_h) 
         initialized_ = false;
         return -1;
     }
+    if (output_w_ <= 0 || output_h_ <= 0) {
+        output_w_ = std::max(input_w_ / 4, 1);
+        output_h_ = std::max(input_h_ / 4, 1);
+        fprintf(stderr,
+                "[WARN] Failed to resolve output tensor size, fallback to input/4 = %dx%d\n",
+                output_w_, output_h_);
+    }
+
+    printf("[INFO] Detector output size: %dx%d (heatmap idx=%d, reg idx=%d, reg fmt=%s)\n",
+           output_w_, output_h_,
+           heatmap_output_index_, reg_output_index_,
+           reg_output_is_nhwc_ ? "NHWC" : "NCHW");
 
     return 0;
 }
@@ -220,8 +271,15 @@ void SpotDetector::postprocess(const float* heatmap_data, const float* reg,
         int grid_x = idx % out_w;
         int grid_y = idx / out_w;
 
-        float reg_x = reg[0 * total + idx];
-        float reg_y = reg[1 * total + idx];
+        float reg_x = 0.0f;
+        float reg_y = 0.0f;
+        if (reg_output_is_nhwc_) {
+            reg_x = reg[idx * 2 + 0];
+            reg_y = reg[idx * 2 + 1];
+        } else {
+            reg_x = reg[0 * total + idx];
+            reg_y = reg[1 * total + idx];
+        }
 
         float feat_x = grid_x + reg_x;
         float feat_y = grid_y + reg_y;
@@ -242,7 +300,7 @@ std::vector<Detection> SpotDetector::detect(const cv::Mat& image_bgr,
     if (!initialized_) return detections;
 
     ResizePadInfo info{};
-    cv::Mat canvas = preprocess(image_bgr, info);  // canvas: uint8 BGR [H, W, 3], NHWC layout
+    cv::Mat canvas = preprocess(image_bgr, info);  // canvas: uint8 RGB [H, W, 3], NHWC layout
 
     rknn_input inputs[1];
     memset(inputs, 0, sizeof(inputs));
@@ -291,10 +349,10 @@ std::vector<Detection> SpotDetector::detect(const cv::Mat& image_bgr,
         return detections;
     }
 
-    int out_h = input_h_ / 4;
-    int out_w = input_w_ / 4;
-    const float* heatmap = static_cast<float*>(outputs[0].buf);
-    const float* reg     = static_cast<float*>(outputs[1].buf);
+    int out_h = output_h_;
+    int out_w = output_w_;
+    const float* heatmap = static_cast<float*>(outputs[heatmap_output_index_].buf);
+    const float* reg     = static_cast<float*>(outputs[reg_output_index_].buf);
 
     postprocess(heatmap, reg, out_h, out_w, info,
                 score_threshold, topk, nms_kernel, detections);

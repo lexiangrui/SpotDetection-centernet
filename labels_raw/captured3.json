@@ -537,6 +537,34 @@
       "shape_type": "line",
       "flags": {},
       "mask": null
+    },
+    {
+      "label": "spot",
+      "points": [
+        [
+          1130.181818181818,
+          949.8181818181816
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "point",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "spot",
+      "points": [
+        [
+          1184.7272727272725,
+          527.090909090909
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "point",
+      "flags": {},
+      "mask": null
     }
   ],
   "imagePath": "../photos/captured3.jpg",

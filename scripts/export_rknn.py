@@ -51,12 +51,11 @@ class OnnxExportWrapper(nn.Module):
 
 def export_raw_onnx(checkpoint_path: Path, output_onnx: Path, cfg: dict,
                     batch_size: int = 1, opset: int = 17) -> None:
-    """Export ONNX with raw uint8-like input (no ImageNet normalization baked in).
+    """Export ONNX with raw RGB input expectation (no ImageNet normalization baked in).
 
-    The ONNX model receives pre-normalized images: (pixel / 255.0 - mean) / std.
-    This keeps preprocessing identical to PyTorch, and lets RKNN apply the same
-    normalization via its built-in mean/std preprocessing, which gets fused into
-    the model graph for NPU efficiency.
+    The exported ONNX still expects normalized RGB tensors, identical to PyTorch.
+    RKNN then reproduces that normalization through mean/std preprocessing so the
+    runtime path can feed uint8 RGB letterbox input directly.
     """
     from centernet_spot.config import load_config
     from centernet_spot.model import SpotCenterNet
@@ -87,6 +86,7 @@ def export_raw_onnx(checkpoint_path: Path, output_onnx: Path, cfg: dict,
     export_model = OnnxExportWrapper(model)
 
     with torch.no_grad():
+        sample_outputs = model(dummy_input)
         torch.onnx.export(
             export_model,
             dummy_input,
@@ -100,6 +100,7 @@ def export_raw_onnx(checkpoint_path: Path, output_onnx: Path, cfg: dict,
 
     print(f"[onnx] exported -> {output_onnx}")
     print(f"[onnx] input:  images [{batch_size}, 3, {input_h}, {input_w}] float32")
+    print(f"[onnx] outputs: heatmap{tuple(sample_outputs['heatmap'].shape)} reg{tuple(sample_outputs['reg'].shape)}")
 
 
 # ---------------------------------------------------------------------------
@@ -362,7 +363,7 @@ def main() -> None:
     print(f"  Platform   : {args.platform}")
     if args.quantize == "int8":
         print(f"  Calibration: {calib_dataset} ({args.calib_size} images)")
-        print("\n部署注意: INT8 模型输入 uint8 BGR [N,H,W,3]，mean/std 由 NPU 融合，")
+        print("\n部署注意: INT8 模型输入 uint8 RGB [N,H,W,3]，mean/std 由 NPU 融合，")
         print("         detect() 无需额外归一化，直接传 NHWC uint8 canvas。")
     else:
         print("\n部署注意: FP32 模型输入 float32，需要 CPU 归一化：")

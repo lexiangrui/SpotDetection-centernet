@@ -14,6 +14,8 @@
 #include <exception>
 #include <fcntl.h>
 #include <iostream>
+#include <linux/media-bus-format.h>
+#include <linux/v4l2-subdev.h>
 #include <linux/videodev2.h>
 #include <mutex>
 #include <queue>
@@ -120,6 +122,96 @@ std::string fourcc_to_string(uint32_t fourcc) {
         '\0',
     };
     return std::string(text);
+}
+
+bool needs_high_res_pipeline(int width, int height) {
+    return width > 2112 || height > 1568;
+}
+
+bool set_subdev_format(const std::string& device_path, uint32_t pad,
+                       uint32_t code, int width, int height,
+                       const char* label) {
+    int fd = open(device_path.c_str(), O_RDWR | O_CLOEXEC);
+    if (fd < 0) {
+        std::cerr << "[Subdev] Failed to open " << device_path
+                  << " for " << label << ": " << std::strerror(errno) << std::endl;
+        return false;
+    }
+
+    v4l2_subdev_format fmt{};
+    fmt.which = V4L2_SUBDEV_FORMAT_ACTIVE;
+    fmt.pad = pad;
+    fmt.format.width = static_cast<uint32_t>(width);
+    fmt.format.height = static_cast<uint32_t>(height);
+    fmt.format.code = code;
+    fmt.format.field = V4L2_FIELD_NONE;
+
+    if (retry_ioctl(fd, VIDIOC_SUBDEV_S_FMT, &fmt) < 0) {
+        std::cerr << "[Subdev] VIDIOC_SUBDEV_S_FMT failed for " << label
+                  << " on " << device_path << " pad " << pad
+                  << ": " << std::strerror(errno) << std::endl;
+        close(fd);
+        return false;
+    }
+
+    close(fd);
+    std::cout << "[Subdev] " << label << " -> " << device_path
+              << " pad=" << pad
+              << " code=0x" << std::hex << fmt.format.code << std::dec
+              << " size=" << fmt.format.width << "x" << fmt.format.height
+              << std::endl;
+    return true;
+}
+
+bool configure_high_res_pipeline(const StreamConfig& config) {
+    if (!needs_high_res_pipeline(config.frame_w, config.frame_h)) {
+        return true;
+    }
+
+    std::cout << "[Subdev] Pre-configuring OV13850/RKISP pipeline for "
+              << config.frame_w << "x" << config.frame_h << std::endl;
+
+    // This deployment is fixed to the RK3576 board where:
+    // OV13850 -> csi2-dphy3 -> rockchip-mipi-csi2 -> rkcif-mipi-lvds3 -> rkisp-vir1
+    static const std::string kSensorSubdev = "/dev/v4l-subdev2";
+    static const std::string kDphySubdev = "/dev/v4l-subdev1";
+    static const std::string kCsiSubdev = "/dev/v4l-subdev0";
+    static const std::string kCifSubdev = "/dev/v4l-subdev5";
+    static const std::string kIspSubdev = "/dev/v4l-subdev4";
+
+    const uint32_t raw_code = MEDIA_BUS_FMT_SBGGR10_1X10;
+    const uint32_t isp_output_code = MEDIA_BUS_FMT_YUYV8_2X8;
+
+    const bool ok =
+        set_subdev_format(kSensorSubdev, 0, raw_code,
+                          config.frame_w, config.frame_h, "sensor source") &&
+        set_subdev_format(kDphySubdev, 0, raw_code,
+                          config.frame_w, config.frame_h, "dphy sink") &&
+        set_subdev_format(kDphySubdev, 1, raw_code,
+                          config.frame_w, config.frame_h, "dphy source") &&
+        set_subdev_format(kCsiSubdev, 0, raw_code,
+                          config.frame_w, config.frame_h, "csi sink") &&
+        set_subdev_format(kCsiSubdev, 1, raw_code,
+                          config.frame_w, config.frame_h, "csi source") &&
+        set_subdev_format(kCifSubdev, 0, raw_code,
+                          config.frame_w, config.frame_h, "cif source") &&
+        set_subdev_format(kIspSubdev, 0, raw_code,
+                          config.frame_w, config.frame_h, "isp sink") &&
+        set_subdev_format(kIspSubdev, 2, isp_output_code,
+                          config.frame_w, config.frame_h, "isp mainpath source");
+
+    if (!ok) {
+        std::cerr << "[Subdev] Failed to switch pipeline to "
+                  << config.frame_w << "x" << config.frame_h
+                  << ". If the board still exposes only 2112x1568 on /dev/video22, "
+                  << "the current BSP likely does not allow 4K on rkisp mainpath."
+                  << std::endl;
+        return false;
+    }
+
+    // Let the media pipeline settle before opening the video node.
+    usleep(200 * 1000);
+    return true;
 }
 
 class V4L2Capture {
@@ -812,17 +904,22 @@ void draw_coordinate_grid(cv::Mat& image, int step) {
     }
 }
 
-void capture_thread(BoundedQueue<cv::Mat>& raw_queue, int camera_index,
-                    int frame_w, int frame_h, int fps) {
+void capture_thread(BoundedQueue<cv::Mat>& raw_queue, const StreamConfig& config) {
+    if (!configure_high_res_pipeline(config)) {
+        g_running = false;
+        raw_queue.close();
+        return;
+    }
+
     V4L2Capture capture;
-    if (!capture.open_device(camera_index, frame_w, frame_h, fps)) {
+    if (!capture.open_device(config.camera_index, config.frame_w, config.frame_h, config.fps)) {
         g_running = false;
         raw_queue.close();
         return;
     }
 
     std::cout << "[Capture] Started, device=" << capture.device_path()
-              << " requested=" << frame_w << "x" << frame_h << "@" << fps
+              << " requested=" << config.frame_w << "x" << config.frame_h << "@" << config.fps
               << " actual=" << capture.width() << "x" << capture.height()
               << " fmt=" << capture.pixel_format_name()
               << " fps=" << capture.fps() << std::endl;
@@ -837,14 +934,14 @@ void capture_thread(BoundedQueue<cv::Mat>& raw_queue, int camera_index,
             break;
         }
 
-        if (frame.cols != frame_w || frame.rows != frame_h) {
+        if (frame.cols != config.frame_w || frame.rows != config.frame_h) {
             if (!warned_resize) {
                 std::cerr << "[Capture] Driver output " << frame.cols << "x" << frame.rows
-                          << " differs from requested " << frame_w << "x" << frame_h
+                          << " differs from requested " << config.frame_w << "x" << config.frame_h
                           << ", resizing in software" << std::endl;
                 warned_resize = true;
             }
-            cv::resize(frame, frame, cv::Size(frame_w, frame_h), 0, 0, cv::INTER_LINEAR);
+            cv::resize(frame, frame, cv::Size(config.frame_w, config.frame_h), 0, 0, cv::INTER_LINEAR);
         }
 
         raw_queue.push(std::move(frame));
@@ -995,8 +1092,7 @@ int main(int argc, char* argv[]) {
     BoundedQueue<cv::Mat> result_queue(3);
 
     std::thread t_capture(capture_thread,
-                          std::ref(raw_queue), config.camera_index,
-                          config.frame_w, config.frame_h, config.fps);
+                          std::ref(raw_queue), std::cref(config));
     std::thread t_detect(detect_thread,
                          std::ref(raw_queue),
                          std::ref(result_queue),

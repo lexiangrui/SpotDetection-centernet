@@ -13,12 +13,12 @@ data:
   spot_size_label: spot_size
   spot_size_shape_type: line
   input_width: 640
-  input_height: 640
+  input_height: 480
   down_ratio: 4
   max_objects: 512
   train_augment:
-    brightness_gain: 0
-    noise_std: 0
+    brightness_gain: 0.1
+    noise_std: 0.008
 
 train:
   batch_size: 4
