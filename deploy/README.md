@@ -77,7 +77,7 @@ python scripts/export_onnx.py \
 ```bash
 python scripts/export_rknn.py \
   --checkpoint models/spot_centernet_resnet18_focal/best.pt \
-  --output deploy/model/spot_centernet_int8.rknn \
+  --output deploy/model/spot_centernet_resnet18_int8.rknn \
   --quantize int8
 ```
 
@@ -86,7 +86,7 @@ python scripts/export_rknn.py \
 ```bash
 python scripts/export_rknn.py \
   --checkpoint models/spot_centernet_resnet18_focal/best.pt \
-  --output deploy/model/spot_centernet_fp32.rknn \
+  --output deploy/model/spot_centernet_resnet18_fp.rknn \
   --quantize fp32
 ```
 
@@ -95,7 +95,7 @@ python scripts/export_rknn.py \
 ```bash
 python scripts/export_rknn.py \
   --onnx outputs/best.onnx \
-  --output deploy/model/spot_centernet_int8.rknn
+  --output deploy/model/spot_centernet_resnet18_int8.rknn
 ```
 
 `export_rknn.py` 当前会自动：
@@ -158,8 +158,8 @@ ninja
 示例：
 
 ```bash
-./spot_detect ../model/spot_centernet_int8.rknn test.jpg
-./spot_detect ../model/spot_centernet_int8.rknn test.jpg 0.3 256 5
+./spot_detect ../model/spot_centernet_resnet18_int8.rknn test.jpg
+./spot_detect ../model/spot_centernet_resnet18_int8.rknn test.jpg 0.3 256 5
 ```
 
 输出：
@@ -179,7 +179,7 @@ ninja
 
 ```bash
 ./spot_stream
-./spot_stream --model ./model/spot_centernet_int8.rknn --ip 192.168.99.230
+./spot_stream --model ./model/spot_centernet_resnet18_int8.rknn --ip 192.168.99.230
 ./spot_stream --camera 22 --threshold 0.1 --topk 256 --nms-kernel 9 --video-mode low --fps 30
 ```
 
@@ -187,7 +187,7 @@ ninja
 
 | 参数 | 默认值 |
 | --- | --- |
-| `model_path` | `./model/spot_centernet.rknn` |
+| `model_path` | `./model/spot_centernet_resnet18_int8.rknn` |
 | `target_ip` | `192.168.99.230` |
 | `camera_index` | `22` |
 | `score_threshold` | `0.3` |

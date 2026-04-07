@@ -141,7 +141,7 @@ def build_calibration_dataset(
 
     Returns the path to the generated dataset txt file.
     """
-    from centernet_spot.preprocessing import preprocess_image_numpy
+    from centernet_spot.transforms import resize_and_pad_image
 
     cache_dir = output_npy.parent / output_npy.stem
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -157,9 +157,14 @@ def build_calibration_dataset(
         if img is None:
             print(f"[calib] warning: cannot read {img_path}, skipping")
             continue
-        norm = preprocess_image_numpy(img, cfg, input_w, input_h).astype(np.float32)  # [1, 3, H, W]
+        # Match deploy path semantically for INT8 calibration: BGR -> RGB, letterbox,
+        # uint8, no CPU normalization. RKNN toolkit 2.3.x still expects calibration .npy
+        # samples in NCHW layout, so we store [1, 3, H, W].
+        image_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        canvas_rgb, _ = resize_and_pad_image(image_rgb, (input_w, input_h))
+        sample = np.expand_dims(canvas_rgb.transpose(2, 0, 1).astype(np.uint8), axis=0)  # [1, 3, H, W]
         sample_path = cache_dir / f"{img_path.stem}.npy"
-        np.save(sample_path, norm)
+        np.save(sample_path, sample)
         lines.append(str(sample_path))
         kept += 1
         if (i + 1) % 20 == 0:

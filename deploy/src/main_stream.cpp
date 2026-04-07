@@ -83,7 +83,7 @@ struct PipelineData {
 };
 
 struct StreamConfig {
-    std::string model_path = "./model/spot_centernet.rknn";
+    std::string model_path = "./model/spot_centernet_resnet18_int8.rknn";
     std::string ip = "192.168.99.230";
     int camera_index = 22;
     float score_threshold = 0.3f;
@@ -523,7 +523,7 @@ void print_help(const char* program) {
         << "Usage:\n"
         << "  " << program << " [options]\n\n"
         << "Options:\n"
-        << "  --model <path>         RKNN model path (default: ./model/spot_centernet.rknn)\n"
+        << "  --model <path>         RKNN model path (default: ./model/spot_centernet_resnet18_int8.rknn)\n"
         << "  --ip <addr>            UDP target IP, port is fixed to 5000 (default: 192.168.99.230)\n"
         << "  --camera <index>       Camera index (default: 22)\n"
         << "  --threshold <float>    Detection score threshold (default: 0.3)\n"
@@ -542,7 +542,7 @@ void print_help(const char* program) {
         << "  high                   4224x3136\n\n"
         << "Examples:\n"
         << "  " << program << "\n"
-        << "  " << program << " --model ./model/spot_centernet.rknn --ip 192.168.99.230\n"
+        << "  " << program << " --model ./model/spot_centernet_resnet18_int8.rknn --ip 192.168.99.230\n"
         << "  " << program << " --camera 22 --threshold 0.3 --video-mode low --fps 30\n"
         << "  " << program << " --video-mode medium --fps 30 --grid-step 200\n"
         << "  " << program << " --video-mode high --fps 15 --grid-step 200\n"
