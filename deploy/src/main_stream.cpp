@@ -182,17 +182,16 @@ bool configure_high_res_pipeline(const StreamConfig& config) {
     const uint32_t raw_code = MEDIA_BUS_FMT_SBGGR10_1X10;
     const uint32_t isp_output_code = MEDIA_BUS_FMT_YUYV8_2X8;
 
+    // On this BSP the source pads of DPHY/CSI reject explicit S_FMT with EINVAL.
+    // The pipeline still negotiates correctly as long as the sensor, sink pads,
+    // CIF source, and ISP pads are configured before opening /dev/video22.
     const bool ok =
         set_subdev_format(kSensorSubdev, 0, raw_code,
                           config.frame_w, config.frame_h, "sensor source") &&
         set_subdev_format(kDphySubdev, 0, raw_code,
                           config.frame_w, config.frame_h, "dphy sink") &&
-        set_subdev_format(kDphySubdev, 1, raw_code,
-                          config.frame_w, config.frame_h, "dphy source") &&
         set_subdev_format(kCsiSubdev, 0, raw_code,
                           config.frame_w, config.frame_h, "csi sink") &&
-        set_subdev_format(kCsiSubdev, 1, raw_code,
-                          config.frame_w, config.frame_h, "csi source") &&
         set_subdev_format(kCifSubdev, 0, raw_code,
                           config.frame_w, config.frame_h, "cif source") &&
         set_subdev_format(kIspSubdev, 0, raw_code,
@@ -202,10 +201,7 @@ bool configure_high_res_pipeline(const StreamConfig& config) {
 
     if (!ok) {
         std::cerr << "[Subdev] Failed to switch pipeline to "
-                  << config.frame_w << "x" << config.frame_h
-                  << ". If the board still exposes only 2112x1568 on /dev/video22, "
-                  << "the current BSP likely does not allow 4K on rkisp mainpath."
-                  << std::endl;
+                  << config.frame_w << "x" << config.frame_h << std::endl;
         return false;
     }
 
@@ -325,31 +321,55 @@ private:
             return false;
         }
 
-        v4l2_format fmt{};
-        fmt.type = buffer_type_;
-        fmt.fmt.pix_mp.width = static_cast<uint32_t>(requested_w_);
-        fmt.fmt.pix_mp.height = static_cast<uint32_t>(requested_h_);
-        fmt.fmt.pix_mp.pixelformat = V4L2_PIX_FMT_UYVY;
-        fmt.fmt.pix_mp.field = V4L2_FIELD_NONE;
-        fmt.fmt.pix_mp.num_planes = 1;
+        const bool prefer_nv12 = needs_high_res_pipeline(requested_w_, requested_h_);
+        const uint32_t preferred_formats[] = {
+            prefer_nv12 ? V4L2_PIX_FMT_NV12 : V4L2_PIX_FMT_UYVY,
+            prefer_nv12 ? V4L2_PIX_FMT_UYVY : V4L2_PIX_FMT_YUYV,
+            prefer_nv12 ? V4L2_PIX_FMT_YUYV : V4L2_PIX_FMT_NV12,
+        };
 
-        if (retry_ioctl(fd_, VIDIOC_S_FMT, &fmt) < 0) {
+        bool configured = false;
+        int last_errno = 0;
+        for (uint32_t requested_format : preferred_formats) {
+            v4l2_format fmt{};
+            fmt.type = buffer_type_;
+            fmt.fmt.pix_mp.width = static_cast<uint32_t>(requested_w_);
+            fmt.fmt.pix_mp.height = static_cast<uint32_t>(requested_h_);
+            fmt.fmt.pix_mp.pixelformat = requested_format;
+            fmt.fmt.pix_mp.field = V4L2_FIELD_NONE;
+            fmt.fmt.pix_mp.num_planes = 1;
+
+            if (retry_ioctl(fd_, VIDIOC_S_FMT, &fmt) < 0) {
+                last_errno = errno;
+                continue;
+            }
+
+            width_ = static_cast<int>(fmt.fmt.pix_mp.width);
+            height_ = static_cast<int>(fmt.fmt.pix_mp.height);
+            pixel_format_ = fmt.fmt.pix_mp.pixelformat;
+            bytes_per_line_ = fmt.fmt.pix_mp.plane_fmt[0].bytesperline;
+            if (bytes_per_line_ == 0) {
+                bytes_per_line_ = (pixel_format_ == V4L2_PIX_FMT_NV12)
+                    ? static_cast<uint32_t>(width_)
+                    : static_cast<uint32_t>(width_ * 2);
+            }
+
+            if (pixel_format_ == V4L2_PIX_FMT_UYVY ||
+                pixel_format_ == V4L2_PIX_FMT_YUYV ||
+                pixel_format_ == V4L2_PIX_FMT_NV12) {
+                configured = true;
+                break;
+            }
+
+            std::cerr << "[Capture] Driver returned unsupported pixel format from "
+                      << device_path_ << ": " << pixel_format_name() << std::endl;
+        }
+
+        if (!configured) {
             std::cerr << "[Capture] VIDIOC_S_FMT failed for " << device_path_
-                      << ": " << std::strerror(errno) << std::endl;
-            return false;
-        }
-
-        width_ = static_cast<int>(fmt.fmt.pix_mp.width);
-        height_ = static_cast<int>(fmt.fmt.pix_mp.height);
-        pixel_format_ = fmt.fmt.pix_mp.pixelformat;
-        bytes_per_line_ = fmt.fmt.pix_mp.plane_fmt[0].bytesperline;
-        if (bytes_per_line_ == 0) {
-            bytes_per_line_ = static_cast<uint32_t>(width_ * 2);
-        }
-
-        if (pixel_format_ != V4L2_PIX_FMT_UYVY && pixel_format_ != V4L2_PIX_FMT_YUYV) {
-            std::cerr << "[Capture] Unsupported pixel format from " << device_path_
-                      << ": " << pixel_format_name() << std::endl;
+                      << " with all supported pixel formats"
+                      << (last_errno ? std::string(": ") + std::strerror(last_errno) : std::string())
+                      << std::endl;
             return false;
         }
 
@@ -469,6 +489,12 @@ private:
         if (index >= buffers_.size()) return false;
 
         const auto& buffer = buffers_[index];
+        if (pixel_format_ == V4L2_PIX_FMT_NV12) {
+            cv::Mat yuv(height_ * 3 / 2, width_, CV_8UC1, buffer.data, bytes_per_line_);
+            cv::cvtColor(yuv, bgr_frame, cv::COLOR_YUV2BGR_NV12);
+            return true;
+        }
+
         cv::Mat yuv(height_, width_, CV_8UC2, buffer.data, bytes_per_line_);
         if (pixel_format_ == V4L2_PIX_FMT_UYVY) {
             cv::cvtColor(yuv, bgr_frame, cv::COLOR_YUV2BGR_UYVY);
@@ -839,12 +865,19 @@ void draw_label(cv::Mat& image, const std::string& label, cv::Point origin,
 }
 
 void draw_detections(cv::Mat& image, const std::vector<Detection>& dets) {
+    const int min_side = std::min(image.rows, image.cols);
+    const int marker_size = std::max(5, static_cast<int>(std::round(min_side * 0.009)));
+    const int marker_thickness = std::max(1, static_cast<int>(std::round(marker_size / 5.0)));
+    const double font_scale = std::max(0.35, marker_size / 16.0);
+    const int text_thickness = std::max(1, marker_thickness);
     cv::Scalar color(0, 255, 0);
     for (const auto& det : dets) {
         int cx = static_cast<int>(std::round(det.x));
         int cy = static_cast<int>(std::round(det.y));
-        draw_crosshair(image, cx, cy, 6, color, 1);
-        draw_label(image, make_detection_label(image, det), cv::Point(cx + 8, cy - 4), 0.4, 1, color);
+        draw_crosshair(image, cx, cy, marker_size, color, marker_thickness);
+        draw_label(image, make_detection_label(image, det),
+                   cv::Point(cx + marker_size + 4, cy - std::max(marker_size / 2, 4)),
+                   font_scale, text_thickness, color);
     }
 }
 
@@ -854,9 +887,9 @@ void draw_coordinate_grid(cv::Mat& image, int step) {
     const int rows = image.rows;
     const int cols = image.cols;
     const int min_side = std::min(rows, cols);
-    const int grid_thickness = std::max(1, static_cast<int>(std::round(min_side * 0.0015)));
+    const int grid_thickness = std::max(1, static_cast<int>(std::round(min_side * 0.0014)));
     const int axis_thickness = std::max(2, grid_thickness + 1);
-    const double font_scale = std::max(0.45, min_side / 1800.0);
+    const double font_scale = std::max(0.5, min_side / 1700.0);
     const int text_thickness = std::max(1, grid_thickness);
 
     const cv::Scalar grid_color(160, 160, 160);
@@ -971,12 +1004,15 @@ void detect_thread(BoundedQueue<cv::Mat>& raw_queue,
     cv::Mat frame;
     while (g_running.load() && raw_queue.pop(frame)) {
         std::vector<Detection> dets;
-        if (g_grid_enabled.load()) {
-            draw_coordinate_grid(frame, grid_step);
-        }
         bool inference_enabled = g_inference_enabled.load();
         if (inference_enabled) {
             dets = detector.detect(frame, score_threshold, topk, nms_kernel);
+        }
+
+        if (g_grid_enabled.load()) {
+            draw_coordinate_grid(frame, grid_step);
+        }
+        if (inference_enabled) {
             draw_detections(frame, dets);
         }
 

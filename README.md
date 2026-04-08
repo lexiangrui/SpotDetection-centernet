@@ -181,7 +181,6 @@ python scripts/train.py --config configs/spot_centernet.yaml
 
 - `best.pt`
 - `last.pt`
-- `best_loss.pt`
 - `train.log`
 - `metrics.jsonl`
 - `metrics.csv`
@@ -189,7 +188,6 @@ python scripts/train.py --config configs/spot_centernet.yaml
 - `summary.json`
 - `run_context.json`
 - `loss_curve.png`
-- `tensorboard/events.out.tfevents.*`
 - `train_vis/epoch_XXX.jpg`
 
 当前训练监控方式：
@@ -197,13 +195,6 @@ python scripts/train.py --config configs/spot_centernet.yaml
 - 终端使用 `tqdm` 实时显示训练、验证、评估进度与吞吐。
 - `train.log` 保存完整文本日志，适合长期跑实验时回看。
 - `metrics.jsonl` / `metrics.csv` 保存逐轮结构化指标，方便 pandas、Excel 或自定义脚本分析。
-- TensorBoard 记录 `train/val loss`、`AP`、`F1`、`fitness`、`precision`、`recall`、学习率和样本可视化。
-
-启动 TensorBoard：
-
-```bash
-tensorboard --logdir models/spot_centernet_resnet18_focal/tensorboard
-```
 
 当前训练控制策略：
 

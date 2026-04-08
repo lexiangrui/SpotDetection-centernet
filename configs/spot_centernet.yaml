@@ -18,7 +18,7 @@ data:
   max_objects: 512
   train_augment:
     brightness_gain: 0.1
-    noise_std: 0.008
+    noise_std: 0.01
 
 train:
   batch_size: 4

@@ -12,7 +12,6 @@ from typing import Any, Callable
 import numpy as np
 import torch
 from torch import nn
-from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
@@ -117,10 +116,6 @@ def save_metrics_csv(path: Path, history: list[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
-def create_writer(save_dir: Path) -> SummaryWriter:
-    return SummaryWriter(log_dir=str(save_dir / "tensorboard"))
-
-
 def log_run_context(
     save_dir: Path,
     cfg: dict,
@@ -165,7 +160,6 @@ def run_epoch(
     total_epochs: int,
     phase: str,
     logger: logging.Logger,
-    writer: SummaryWriter,
     global_step: int = 0,
 ) -> tuple[dict[str, float], int]:
     training = optimizer is not None
@@ -226,11 +220,6 @@ def run_epoch(
         progress.set_postfix(postfix)
 
         if training and (step % log_interval == 0 or step == len(loader)):
-            step_index = global_step + step
-            writer.add_scalar("train_step/loss", float(loss.item()), step_index)
-            writer.add_scalar("train_step/hm_loss", float(hm_loss.item()), step_index)
-            writer.add_scalar("train_step/reg_loss", float(reg_loss.item()), step_index)
-            writer.add_scalar("train_step/lr", float(optimizer.param_groups[0]["lr"]), step_index)
             logger.info(
                 "%s epoch %03d step %04d/%04d | loss=%.6f avg_loss=%.6f hm=%.6f reg=%.6f lr=%.3e img/s=%.1f",
                 phase,
@@ -495,7 +484,6 @@ def main() -> None:
     device = get_device()
     save_dir = ensure_dir(cfg["train"]["save_dir"])
     logger = setup_logger(save_dir)
-    writer = create_writer(save_dir)
     split_stats = refresh_splits(cfg)
 
     heatmap_loss_type = cfg["train"].get("heatmap_loss_type", "mse")
@@ -524,10 +512,8 @@ def main() -> None:
         )
 
     best_eval: dict[str, float | int | None] | None = None
-    best_val = float("inf")
     best_eval_val_loss = float("inf")
     best_epoch = 0
-    best_loss_epoch = 0
     selection_min_delta = float(cfg["train"].get("selection_min_delta", 1e-4))
     early_stop_patience = int(cfg["train"].get("early_stop_patience", 12))
     epochs_without_improvement = 0
@@ -550,8 +536,6 @@ def main() -> None:
         int(cfg["train"]["batch_size"]),
         save_dir,
     )
-    writer.add_text("run/device", str(device))
-    writer.add_text("run/config", json.dumps(cfg, ensure_ascii=False, indent=2))
 
     for epoch in range(1, total_epochs + 1):
         train_metrics, global_step = run_epoch(
@@ -565,7 +549,6 @@ def main() -> None:
             total_epochs=total_epochs,
             phase="train",
             logger=logger,
-            writer=writer,
             global_step=global_step,
         )
         with torch.no_grad():
@@ -580,7 +563,6 @@ def main() -> None:
                 total_epochs=total_epochs,
                 phase="val",
                 logger=logger,
-                writer=writer,
             )
         eval_result = evaluate_model(model, val_loader, device, cfg, epoch=epoch, total_epochs=total_epochs)
         eval_metrics = eval_result["best"]
@@ -611,24 +593,6 @@ def main() -> None:
             float(optimizer.param_groups[0]["lr"]),
         )
 
-        writer.add_scalar("epoch/train_loss", float(train_metrics["loss"]), epoch)
-        writer.add_scalar("epoch/train_hm_loss", float(train_metrics["hm_loss"]), epoch)
-        writer.add_scalar("epoch/train_reg_loss", float(train_metrics["reg_loss"]), epoch)
-        writer.add_scalar("epoch/train_samples_per_sec", float(train_metrics["samples_per_sec"]), epoch)
-        writer.add_scalar("epoch/val_loss", float(val_metrics["loss"]), epoch)
-        writer.add_scalar("epoch/val_hm_loss", float(val_metrics["hm_loss"]), epoch)
-        writer.add_scalar("epoch/val_reg_loss", float(val_metrics["reg_loss"]), epoch)
-        writer.add_scalar("epoch/val_samples_per_sec", float(val_metrics["samples_per_sec"]), epoch)
-        writer.add_scalar("eval/ap", float(eval_metrics["ap"]), epoch)
-        writer.add_scalar("eval/f1", float(eval_metrics["f1"]), epoch)
-        writer.add_scalar("eval/fitness", float(eval_metrics["fitness"]), epoch)
-        writer.add_scalar("eval/precision", float(eval_metrics["precision"]), epoch)
-        writer.add_scalar("eval/recall", float(eval_metrics["recall"]), epoch)
-        if eval_metrics.get("mean_loc_error") is not None:
-            writer.add_scalar("eval/mean_loc_error", float(eval_metrics["mean_loc_error"]), epoch)
-        writer.add_scalar("eval/best_threshold", float(eval_metrics["score_threshold"]), epoch)
-        writer.add_scalar("lr/current", float(optimizer.param_groups[0]["lr"]), epoch)
-
         last_payload = {
             "model": model.state_dict(),
             "config": cfg,
@@ -655,17 +619,11 @@ def main() -> None:
         else:
             epochs_without_improvement += 1
 
-        if val_metrics["loss"] < best_val:
-            best_val = val_metrics["loss"]
-            best_loss_epoch = epoch
-            torch.save(last_payload, save_dir / "best_loss.pt")
-
         save_json(save_dir / "metrics.json", history)
 
         if epoch % vis_interval == 0:
             vis_canvas = save_epoch_visualization(model, val_loader, device, cfg, save_dir, epoch)
             if vis_canvas is not None:
-                writer.add_image("val/qualitative", vis_canvas[:, :, ::-1], epoch, dataformats="HWC")
                 logger.info("saved visualization for epoch %03d", epoch)
 
         if scheduler is not None:
@@ -675,8 +633,6 @@ def main() -> None:
             "best_epoch": best_epoch,
             "best_eval_val_loss": round(best_eval_val_loss, 6) if best_epoch else None,
             "best_eval": round_metrics(best_eval) if best_eval is not None else None,
-            "best_loss_epoch": best_loss_epoch if best_loss_epoch else None,
-            "best_loss": round(best_val, 6) if best_loss_epoch else None,
             "epochs_ran": epoch,
             "early_stop_triggered": False,
             "early_stop_patience": early_stop_patience,
@@ -709,8 +665,6 @@ def main() -> None:
         "best_epoch": best_epoch,
         "best_eval_val_loss": round(best_eval_val_loss, 6) if best_epoch else None,
         "best_eval": round_metrics(best_eval) if best_eval is not None else None,
-        "best_loss_epoch": best_loss_epoch if best_loss_epoch else None,
-        "best_loss": round(best_val, 6) if best_loss_epoch else None,
         "epochs_ran": len(history),
         "early_stop_triggered": stop_reason == "early_stop",
         "early_stop_patience": early_stop_patience,
@@ -725,18 +679,16 @@ def main() -> None:
     save_json(save_dir / "summary.json", final_summary)
     if best_eval is not None:
         logger.info(
-            "training finished | best_epoch=%d best_ap=%.6f best_f1=%.6f best_fitness=%.6f best_threshold=%.3f best_loss=%.6f device=%s",
+            "training finished | best_epoch=%d best_ap=%.6f best_f1=%.6f best_fitness=%.6f best_threshold=%.3f device=%s",
             best_epoch,
             float(best_eval["ap"]),
             float(best_eval["f1"]),
             float(best_eval["fitness"]),
             float(best_eval["score_threshold"]),
-            best_val,
             device,
         )
     else:
-        logger.info("training finished | best val loss=%.6f device=%s", best_val, device)
-    writer.close()
+        logger.info("training finished | device=%s", device)
 
 
 if __name__ == "__main__":

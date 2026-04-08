@@ -205,6 +205,51 @@ ninja
 | `medium` | `2112 x 1568` |
 | `high` | `4224 x 3136` |
 
+### 7.3 高分辨采集说明
+
+这块 RK3576 板卡上的 `OV13850 -> CSI -> CIF -> RKISP -> /dev/video22` 链路，不能只靠：
+
+```bash
+./spot_stream --video-mode high --fps 15
+```
+
+里对 `/dev/video22` 的宽高请求，就稳定切到 `4224 x 3136`。实际排查结果是：
+
+- `2112 x 1568` 是当前 BSP 下更常见的默认视频模式
+- `4224 x 3136` 要先把上游 subdev 链路切到高分辨率，再打开 `/dev/video22`
+- 单纯对 `/dev/video22` 做 `VIDIOC_S_FMT`，很容易仍停留在低分辨率，或者被驱动退回
+
+当前 [main_stream.cpp]已经内置了这套板卡专用的高分辨预配置逻辑：
+
+- `/dev/v4l-subdev2`：`sensor source`
+- `/dev/v4l-subdev1`：`dphy sink`
+- `/dev/v4l-subdev0`：`csi sink`
+- `/dev/v4l-subdev5`：`cif source`
+- `/dev/v4l-subdev4`：`isp sink`
+- `/dev/v4l-subdev4` pad `2`：`isp mainpath source`
+
+也就是说，`--video-mode high` 的真实流程不是“只改一组宽高”，而是：
+
+1. 先把上游 sensor / CSI / ISP 的 active format 切到 `4224 x 3136`
+2. 等链路稳定
+3. 再打开 `/dev/video22`
+4. 再对视频节点协商像素格式和缓冲区
+
+如果高分辨启动成功，日志里应看到类似：
+
+```text
+[Subdev] Pre-configuring OV13850/RKISP pipeline for 4224x3136
+[Subdev] sensor source -> /dev/v4l-subdev2 ...
+[Subdev] dphy sink -> /dev/v4l-subdev1 ...
+[Subdev] csi sink -> /dev/v4l-subdev0 ...
+[Subdev] cif source -> /dev/v4l-subdev5 ...
+[Subdev] isp sink -> /dev/v4l-subdev4 ...
+[Subdev] isp mainpath source -> /dev/v4l-subdev4 pad=2 ...
+[Capture] Started, device=/dev/video22 requested=4224x3136@15 actual=4224x3136 fmt=NV12 fps=15
+```
+
+
+
 ## 8. 模型接口要求
 
 当前 C++ 端要求模型满足：

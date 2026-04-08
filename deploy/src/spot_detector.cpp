@@ -100,16 +100,26 @@ int SpotDetector::init(const std::string& model_path, int input_w, int input_h) 
                     input_h_ = model_input_h;
                 }
 
-                // Determine int8 vs fp32 from tensor quantization type
-                // INT8 quantized model: qnt_type != RKNN_TENSOR_QNT_NONE
-                // FP32 / non-quantized model: qnt_type == RKNN_TENSOR_QNT_NONE
-                is_int8_model_ = (attr.qnt_type != RKNN_TENSOR_QNT_NONE);
+                // Prefer the runtime tensor dtype over qnt_type when deciding how to feed input.
+                // Some "fp" RKNN exports still carry affine quantization metadata while exposing
+                // a FLOAT16/FLOAT32 input tensor, and those models must still use float input.
+                const bool input_is_float =
+                    (attr.type == RKNN_TENSOR_FLOAT16 || attr.type == RKNN_TENSOR_FLOAT32);
+                const bool input_is_integer =
+                    (attr.type == RKNN_TENSOR_UINT8 || attr.type == RKNN_TENSOR_INT8);
+                if (input_is_float) {
+                    is_int8_model_ = false;
+                } else if (input_is_integer) {
+                    is_int8_model_ = true;
+                } else {
+                    is_int8_model_ = (attr.qnt_type != RKNN_TENSOR_QNT_NONE);
+                }
 
                 printf("[INFO] Input[0]: name=%s, dims=[%u,%u,%u,%u], type=%d, fmt=%d, qnt=%d, zp=%d, scale=%.4f\n",
                        attr.name, attr.dims[0], attr.dims[1], attr.dims[2], attr.dims[3],
                        attr.type, attr.fmt, attr.qnt_type, attr.zp, attr.scale);
                 printf("[INFO] Model type: %s  (qnt_type=%d)\n",
-                       is_int8_model_ ? "INT8 quantized" : "FP32 (non-quantized)",
+                       is_int8_model_ ? "integer input" : "floating-point input",
                        attr.qnt_type);
                 printf("[INFO] Detector input size: %dx%d\n", input_w_, input_h_);
             } else if (input_w_ <= 0 || input_h_ <= 0) {

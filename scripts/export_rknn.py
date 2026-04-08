@@ -30,7 +30,7 @@ import numpy as np
 import torch
 from torch import nn
 
-# ImageNet mean/std * 255 (for uint8 [0,255] input, used in rknn.config mean_values/std_values)
+# ImageNet mean/std * 255 (for uint8 [0,255] input, used only in INT8 RKNN preprocessing)
 IMAGENET_MEAN_U8 = [123.675, 116.28, 103.53]
 IMAGENET_STD_U8 = [58.395, 57.12, 57.375]
 
@@ -54,8 +54,10 @@ def export_raw_onnx(checkpoint_path: Path, output_onnx: Path, cfg: dict,
     """Export ONNX with raw RGB input expectation (no ImageNet normalization baked in).
 
     The exported ONNX still expects normalized RGB tensors, identical to PyTorch.
-    RKNN then reproduces that normalization through mean/std preprocessing so the
-    runtime path can feed uint8 RGB letterbox input directly.
+    For INT8 RKNN export, RKNN reproduces that normalization through mean/std
+    preprocessing so the runtime path can feed uint8 RGB letterbox input directly.
+    For pure floating-point RKNN export, deploy-side code must normalize on CPU
+    and feed float input directly.
     """
     from centernet_spot.config import load_config
     from centernet_spot.model import SpotCenterNet
@@ -187,11 +189,8 @@ def convert_to_rknn(
     onnx_path: Path,
     rknn_path: Path,
     calibration_dataset: Path,
-    cfg: dict,
     quantize: str,
     target_platform: str,
-    input_h: int,
-    input_w: int,
 ) -> None:
     """Convert ONNX to RKNN with quantization."""
     try:
@@ -204,20 +203,21 @@ def convert_to_rknn(
 
     rknn = RKNN(verbose=False)
 
-    # rknn-toolkit2 2.3.x compatibility:
-    # - int8: use quantized_dtype='w8a8' and do_quantization=True
-    # - fp32/fp16 path: do_quantization=False, keep float_dtype='float16'
+    # rknn-toolkit2 compatibility:
+    # - int8: use quantized_dtype='w8a8', do_quantization=True, and fuse mean/std
+    # - fp32: do_quantization=False, no RKNN-side preprocessing, keep float32 input
     # - channel conversion uses quant_img_RGB2BGR instead of reorder_channel
     config_kwargs = dict(
-        mean_values=[IMAGENET_MEAN_U8],
-        std_values=[IMAGENET_STD_U8],
         target_platform=target_platform,
         quant_img_RGB2BGR=False,
-        float_dtype="float16",
         optimization_level=3,
     )
     if quantize == "int8":
+        config_kwargs["mean_values"] = [IMAGENET_MEAN_U8]
+        config_kwargs["std_values"] = [IMAGENET_STD_U8]
         config_kwargs["quantized_dtype"] = "w8a8"
+    else:
+        config_kwargs["float_dtype"] = "float32"
 
     rknn.config(**config_kwargs)
 
@@ -332,21 +332,25 @@ def main() -> None:
         cfg["_arg_config"] = args.config  # pass through for resolve_config
         export_raw_onnx(ckpt_path, onnx_path, cfg, batch_size=args.batch_size, opset=args.opset)
 
-    # Calibration dataset
-    calib_npy = calib_dir / f"calib_{input_h}x{input_w}.npy"
-    calib_dataset = calib_npy.with_suffix('.txt')
-    split_file = project_root / args.calib_split
+    # Calibration dataset (INT8 only)
+    calib_dataset = None
+    if args.quantize == "int8":
+        calib_npy = calib_dir / f"calib_{input_h}x{input_w}.npy"
+        calib_dataset = calib_npy.with_suffix('.txt')
+        split_file = project_root / args.calib_split
 
-    if args.reuse_calib and calib_dataset.exists():
-        print(f"[calib] reuse cached: {calib_dataset}")
+        if args.reuse_calib and calib_dataset.exists():
+            print(f"[calib] reuse cached: {calib_dataset}")
+        else:
+            print(f"[calib] building from: {split_file}")
+            image_paths = get_image_paths_for_calibration(split_file, photos_dir, args.calib_size)
+            if not image_paths:
+                print("ERROR: no calibration images found", file=sys.stderr)
+                sys.exit(1)
+            print(f"[calib] using {len(image_paths)} images")
+            calib_dataset = build_calibration_dataset(image_paths, cfg, calib_npy)
     else:
-        print(f"[calib] building from: {split_file}")
-        image_paths = get_image_paths_for_calibration(split_file, photos_dir, args.calib_size)
-        if not image_paths:
-            print("ERROR: no calibration images found", file=sys.stderr)
-            sys.exit(1)
-        print(f"[calib] using {len(image_paths)} images")
-        calib_dataset = build_calibration_dataset(image_paths, cfg, calib_npy)
+        print("[calib] skipped for fp32 export")
 
     # RKNN conversion
     print(f"[rknn] converting: {onnx_path} -> {output_rknn}")
@@ -355,11 +359,8 @@ def main() -> None:
         onnx_path=onnx_path,
         rknn_path=output_rknn,
         calibration_dataset=calib_dataset,
-        cfg=cfg,
         quantize=args.quantize,
         target_platform=args.platform,
-        input_h=input_h,
-        input_w=input_w,
     )
 
     print("\nDone!")
@@ -371,9 +372,10 @@ def main() -> None:
         print("\n部署注意: INT8 模型输入 uint8 RGB [N,H,W,3]，mean/std 由 NPU 融合，")
         print("         detect() 无需额外归一化，直接传 NHWC uint8 canvas。")
     else:
-        print("\n部署注意: FP32 模型输入 float32，需要 CPU 归一化：")
+        print("\n部署注意: FP32 模型不做量化，也不做 RKNN 侧 mean/std 预处理。")
+        print("         部署端必须输入 float32，并在 CPU 上完成归一化：")
         print("         input = ((pixel/255.0 - [0.485,0.456,0.406]) / [0.229,0.224,0.225]).astype(np.float32)")
-        print("         需要更新 deploy/src/spot_detector.cpp 支持 float32 输入。")
+        print("         当前 deploy/src/spot_detector.cpp 已支持 float 输入路径。")
 
 
 if __name__ == "__main__":
