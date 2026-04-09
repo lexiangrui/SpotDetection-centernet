@@ -7,6 +7,7 @@
 #include "opencv2/core.hpp"
 
 struct Detection {
+    int id;
     float x;
     float y;
     float score;
@@ -48,7 +49,8 @@ private:
 
     rknn_context ctx_ = 0;
     bool initialized_ = false;
-    bool is_int8_model_ = true;   // true=int8量化模型(输入uint8), false=fp32模型(输入float32)
+    bool is_int8_model_ = true;   // true=整数输入模型(uint8/int8), false=浮点输入模型(fp16/fp32)
+    rknn_tensor_type input_tensor_type_ = RKNN_TENSOR_UINT8;
     int input_w_ = 640;
     int input_h_ = 480;
     int output_w_ = 0;

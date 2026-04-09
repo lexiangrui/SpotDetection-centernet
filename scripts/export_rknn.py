@@ -1,5 +1,5 @@
 """
-将 CenterNet Spot ONNX 模型转换为 RKNN 格式，支持 INT8 量化和非量化两种模式。
+将 CenterNet Spot ONNX 模型转换为 RKNN 格式，支持 INT8 量化和 FP16 两种模式。
 
 依赖:
     pip install rknn-toolkit2 --extra-index-url https://download.rockchip.com/rknn/rknn-toolkit2/latest/
@@ -9,9 +9,9 @@
     python scripts/export_rknn.py --checkpoint models/spot_centernet_resnet18_focal/best.pt \
         --output deploy/model/spot_centernet_int8.rknn --quantize int8
 
-    # 不量化（FP32，精度最高）:
+    # 不量化（FP16，浮点模型）:
     python scripts/export_rknn.py --checkpoint models/spot_centernet_resnet18_focal/best.pt \
-        --output deploy/model/spot_centernet_fp32.rknn --quantize fp32
+        --output deploy/model/spot_centernet_fp16.rknn --quantize fp16
 
     # 复用已有 ONNX:
     python scripts/export_rknn.py --onnx models/spot_centernet_resnet18_focal/best.onnx \
@@ -205,7 +205,7 @@ def convert_to_rknn(
 
     # rknn-toolkit2 compatibility:
     # - int8: use quantized_dtype='w8a8', do_quantization=True, and fuse mean/std
-    # - fp32: do_quantization=False, no RKNN-side preprocessing, keep float32 input
+    # - fp16: do_quantization=False, no RKNN-side preprocessing, keep float16 input
     # - channel conversion uses quant_img_RGB2BGR instead of reorder_channel
     config_kwargs = dict(
         target_platform=target_platform,
@@ -217,7 +217,7 @@ def convert_to_rknn(
         config_kwargs["std_values"] = [IMAGENET_STD_U8]
         config_kwargs["quantized_dtype"] = "w8a8"
     else:
-        config_kwargs["float_dtype"] = "float32"
+        config_kwargs["float_dtype"] = "float16"
 
     rknn.config(**config_kwargs)
 
@@ -258,8 +258,8 @@ def main() -> None:
                         help="Skip ONNX export; use this existing ONNX file directly.")
     parser.add_argument("--output", type=str, required=True,
                         help="Output RKNN path (.rknn).")
-    parser.add_argument("--quantize", type=str, choices=["int8", "fp32"], default="int8",
-                        help="量化模式: int8 (INT8 量化), fp32 (不量化)")
+    parser.add_argument("--quantize", type=str, choices=["int8", "fp16"], default="int8",
+                        help="导出模式: int8 (INT8 量化), fp16 (浮点模型)")
     parser.add_argument("--platform", type=str, default="rk3576",
                         help="目标平台，如 rk3576, rk3588, rk356x 等 (默认: rk3576).")
     parser.add_argument("--calib-split", type=str, default="splits/val.txt",
@@ -350,7 +350,7 @@ def main() -> None:
             print(f"[calib] using {len(image_paths)} images")
             calib_dataset = build_calibration_dataset(image_paths, cfg, calib_npy)
     else:
-        print("[calib] skipped for fp32 export")
+        print("[calib] skipped for fp16 export")
 
     # RKNN conversion
     print(f"[rknn] converting: {onnx_path} -> {output_rknn}")
@@ -372,10 +372,9 @@ def main() -> None:
         print("\n部署注意: INT8 模型输入 uint8 RGB [N,H,W,3]，mean/std 由 NPU 融合，")
         print("         detect() 无需额外归一化，直接传 NHWC uint8 canvas。")
     else:
-        print("\n部署注意: FP32 模型不做量化，也不做 RKNN 侧 mean/std 预处理。")
-        print("         部署端必须输入 float32，并在 CPU 上完成归一化：")
-        print("         input = ((pixel/255.0 - [0.485,0.456,0.406]) / [0.229,0.224,0.225]).astype(np.float32)")
-        print("         当前 deploy/src/spot_detector.cpp 已支持 float 输入路径。")
+        print("\n部署注意: FP16 模型不做量化，也不做 RKNN 侧 mean/std 预处理。")
+        print("         部署端必须先在 CPU 上完成归一化，再按模型输入类型送入浮点数据。")
+        print("         当前 deploy/src/spot_detector.cpp 已支持 FLOAT16/FLOAT32 输入路径。")
 
 
 if __name__ == "__main__":

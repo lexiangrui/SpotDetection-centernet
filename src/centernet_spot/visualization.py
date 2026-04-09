@@ -68,22 +68,83 @@ def draw_crosshair(canvas: np.ndarray, cx: int, cy: int,
     cv2.line(canvas, (cx, cy - size), (cx, cy + size), color, thickness, cv2.LINE_AA)
 
 
+def draw_text_box(
+    canvas: np.ndarray,
+    text: str,
+    anchor: tuple[int, int],
+    font_scale: float,
+    thickness: int,
+    color: tuple[int, int, int],
+    align: str = "left",
+) -> None:
+    text_size, baseline = cv2.getTextSize(
+        text,
+        cv2.FONT_HERSHEY_SIMPLEX,
+        font_scale,
+        thickness,
+    )
+    x, y = anchor
+    if align == "right":
+        x -= text_size[0]
+
+    x = max(0, min(x, canvas.shape[1] - text_size[0] - 4))
+    y = max(text_size[1] + 4, min(y, canvas.shape[0] - baseline - 4))
+    cv2.putText(
+        canvas,
+        text,
+        (x, y),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        font_scale,
+        color,
+        thickness,
+        cv2.LINE_AA,
+    )
+
+
 def draw_detections_cross(image: np.ndarray, detections: list[dict]) -> np.ndarray:
     """在图片上用十字架标记每个检测到的光斑。"""
     canvas = image.copy()
     min_side = min(image.shape[:2])
     marker_size = max(6, int(round(min_side * 0.012)))
     marker_thickness = max(1, int(round(marker_size / 4.5)))
-    font_scale = max(0.36, marker_size / 15.0)
-    text_thickness = max(1, marker_thickness)
+    font_scale = max(0.24, marker_size / 21.0)
+    text_thickness = min(3, max(1, int(round(min_side / 1200.0))))
     for det in detections:
         cx = int(round(det["x"]))
         cy = int(round(det["y"]))
         draw_crosshair(canvas, cx, cy, size=marker_size, color=(0, 255, 0), thickness=marker_thickness)
-        label = f'{det["score"]:.2f}'
-        label_pos = (cx + marker_size + 4, cy - max(marker_size // 2, 4))
-        cv2.putText(canvas, label, label_pos, cv2.FONT_HERSHEY_SIMPLEX,
-                    font_scale, (0, 255, 0), text_thickness, cv2.LINE_AA)
+        display_x = int(round(float(det["x"])))
+        display_y = int(round(float(image.shape[0]) - float(det["y"])))
+        offset = max(4, marker_size - 1)
+        lower_y = cy + max(8, marker_size + 2)
+
+        draw_text_box(
+            canvas,
+            f'#{det.get("spot_id", "?")}',
+            (cx - offset, cy - offset),
+            font_scale,
+            text_thickness,
+            (0, 255, 0),
+            align="right",
+        )
+        draw_text_box(
+            canvas,
+            f"({display_x},{display_y})",
+            (cx + offset, cy - offset),
+            font_scale,
+            text_thickness,
+            (0, 255, 0),
+            align="left",
+        )
+        draw_text_box(
+            canvas,
+            f"s={det['score']:.2f}",
+            (cx + offset, lower_y),
+            font_scale,
+            text_thickness,
+            (0, 255, 0),
+            align="left",
+        )
     return canvas
 
 

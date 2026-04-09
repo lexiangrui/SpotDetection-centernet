@@ -6,19 +6,24 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cerrno>
 #include <cmath>
 #include <condition_variable>
 #include <csignal>
+#include <ctime>
 #include <cstring>
 #include <exception>
 #include <fcntl.h>
+#include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <linux/media-bus-format.h>
 #include <linux/v4l2-subdev.h>
 #include <linux/videodev2.h>
 #include <mutex>
 #include <queue>
+#include <sstream>
 #include <string>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
@@ -30,6 +35,17 @@ namespace {
 std::atomic<bool> g_running(true);
 std::atomic<bool> g_inference_enabled(true);
 std::atomic<bool> g_grid_enabled(true);
+std::mutex g_snapshot_mutex;
+
+struct DetectionSnapshot {
+    uint64_t frame_index = 0;
+    int frame_w = 0;
+    int frame_h = 0;
+    bool inference_enabled = false;
+    std::vector<Detection> detections;
+};
+
+DetectionSnapshot g_latest_snapshot;
 
 template<typename T>
 class BoundedQueue {
@@ -576,7 +592,8 @@ void print_help(const char* program) {
         << "  " << program << " --width 4224 --height 3136 --fps 15\n\n"
         << "Runtime:\n"
         << "  Input q + Enter to toggle inference on/off while keeping the stream alive.\n"
-        << "  Input w + Enter to toggle the coordinate grid on/off.\n";
+        << "  Input w + Enter to toggle the coordinate grid on/off.\n"
+        << "  Input e + Enter to export current frame spot coordinates.\n";
 }
 
 bool parse_int_arg(const std::string& text, const char* option_name, int& value) {
@@ -816,6 +833,44 @@ void on_signal(int) {
     g_running = false;
 }
 
+bool save_detection_snapshot(const DetectionSnapshot& snapshot, std::string& output_path) {
+    auto now = std::chrono::system_clock::now();
+    std::time_t now_time = std::chrono::system_clock::to_time_t(now);
+    std::tm local_tm{};
+    localtime_r(&now_time, &local_tm);
+
+    std::ostringstream name_builder;
+    name_builder << "spot_coords_frame_" << snapshot.frame_index << "_"
+                 << std::put_time(&local_tm, "%Y%m%d_%H%M%S") << ".txt";
+    output_path = name_builder.str();
+
+    std::ofstream ofs(output_path);
+    if (!ofs.is_open()) {
+        return false;
+    }
+
+    ofs << "frame_index=" << snapshot.frame_index << "\n";
+    ofs << "frame_size=" << snapshot.frame_w << "x" << snapshot.frame_h << "\n";
+    ofs << "inference_enabled=" << (snapshot.inference_enabled ? "true" : "false") << "\n";
+    ofs << "spot_count=" << snapshot.detections.size() << "\n\n";
+
+    for (const auto& det : snapshot.detections) {
+        const int x = std::clamp(static_cast<int>(std::lround(det.x)), 0, snapshot.frame_w);
+        const int y = std::clamp(
+            static_cast<int>(std::lround(static_cast<double>(snapshot.frame_h) - det.y)),
+            0,
+            snapshot.frame_h
+        );
+        ofs << "spot_id=" << det.id
+            << " x=" << x
+            << " y=" << y
+            << " score=" << std::fixed << std::setprecision(4) << det.score
+            << "\n";
+    }
+
+    return true;
+}
+
 void control_thread() {
     std::string line;
     while (g_running.load() && std::getline(std::cin, line)) {
@@ -829,6 +884,27 @@ void control_thread() {
             g_grid_enabled = enabled;
             std::cout << "[Control] Coordinate grid " << (enabled ? "enabled" : "disabled")
                       << std::endl;
+        } else if (line == "e" || line == "E") {
+            DetectionSnapshot snapshot;
+            {
+                std::lock_guard<std::mutex> lock(g_snapshot_mutex);
+                snapshot = g_latest_snapshot;
+            }
+
+            if (snapshot.frame_w <= 0 || snapshot.frame_h <= 0) {
+                std::cout << "[Control] No processed frame available yet" << std::endl;
+                continue;
+            }
+
+            std::string output_path;
+            if (!save_detection_snapshot(snapshot, output_path)) {
+                std::cerr << "[Control] Failed to write coordinate file" << std::endl;
+                continue;
+            }
+
+            std::cout << "[Control] Exported " << snapshot.detections.size()
+                      << " spots from frame " << snapshot.frame_index
+                      << " to " << output_path << std::endl;
         }
     }
 }
@@ -841,25 +917,16 @@ void draw_crosshair(cv::Mat& canvas, int cx, int cy,
              color, thickness, cv::LINE_AA);
 }
 
-std::string make_detection_label(const cv::Mat& image, const Detection& det) {
-    int x = std::clamp(static_cast<int>(std::lround(det.x)), 0, image.cols);
-    int y = std::clamp(static_cast<int>(std::lround(static_cast<double>(image.rows) - det.y)), 0, image.rows);
-    char label[96];
-    snprintf(label, sizeof(label), "x=%d y=%d s=%.2f", x, y, det.score);
-    return std::string(label);
-}
-
 void draw_label(cv::Mat& image, const std::string& label, cv::Point origin,
-                double font_scale, int thickness, const cv::Scalar& color) {
+                double font_scale, int thickness, const cv::Scalar& color,
+                bool align_right = false) {
     int baseline = 0;
     cv::Size text_size = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, font_scale, thickness, &baseline);
+    if (align_right) {
+        origin.x -= text_size.width;
+    }
     int x = std::max(0, std::min(origin.x, image.cols - text_size.width - 4));
     int y = std::max(text_size.height + 4, std::min(origin.y, image.rows - baseline - 4));
-    cv::rectangle(image,
-                  cv::Point(x - 2, y - text_size.height - 2),
-                  cv::Point(x + text_size.width + 2, y + baseline + 2),
-                  cv::Scalar(0, 0, 0),
-                  cv::FILLED);
     cv::putText(image, label, cv::Point(x, y),
                 cv::FONT_HERSHEY_SIMPLEX, font_scale, color, thickness, cv::LINE_AA);
 }
@@ -868,15 +935,26 @@ void draw_detections(cv::Mat& image, const std::vector<Detection>& dets) {
     const int min_side = std::min(image.rows, image.cols);
     const int marker_size = std::max(5, static_cast<int>(std::round(min_side * 0.009)));
     const int marker_thickness = std::max(1, static_cast<int>(std::round(marker_size / 5.0)));
-    const double font_scale = std::max(0.35, marker_size / 16.0);
-    const int text_thickness = std::max(1, marker_thickness);
+    const double font_scale = std::max(0.22, marker_size / 22.0);
+    const int text_thickness = std::min(3, std::max(1, static_cast<int>(std::round(min_side / 1200.0))));
     cv::Scalar color(0, 255, 0);
     for (const auto& det : dets) {
         int cx = static_cast<int>(std::round(det.x));
         int cy = static_cast<int>(std::round(det.y));
+        int display_x = std::clamp(static_cast<int>(std::lround(det.x)), 0, image.cols);
+        int display_y = std::clamp(static_cast<int>(std::lround(static_cast<double>(image.rows) - det.y)), 0, image.rows);
+        int offset = std::max(4, marker_size - 1);
+        int lower_y = cy + std::max(8, marker_size + 2);
+
         draw_crosshair(image, cx, cy, marker_size, color, marker_thickness);
-        draw_label(image, make_detection_label(image, det),
-                   cv::Point(cx + marker_size + 4, cy - std::max(marker_size / 2, 4)),
+        draw_label(image, "#" + std::to_string(det.id),
+                   cv::Point(cx - offset, cy - offset),
+                   font_scale, text_thickness, color, true);
+        draw_label(image, "(" + std::to_string(display_x) + "," + std::to_string(display_y) + ")",
+                   cv::Point(cx + offset, cy - offset),
+                   font_scale, text_thickness, color);
+        draw_label(image, "s=" + cv::format("%.2f", det.score),
+                   cv::Point(cx + offset, lower_y),
                    font_scale, text_thickness, color);
     }
 }
@@ -1009,6 +1087,15 @@ void detect_thread(BoundedQueue<cv::Mat>& raw_queue,
             dets = detector.detect(frame, score_threshold, topk, nms_kernel);
         }
 
+        {
+            std::lock_guard<std::mutex> lock(g_snapshot_mutex);
+            g_latest_snapshot.frame_index = frame_count + 1;
+            g_latest_snapshot.frame_w = frame.cols;
+            g_latest_snapshot.frame_h = frame.rows;
+            g_latest_snapshot.inference_enabled = inference_enabled;
+            g_latest_snapshot.detections = dets;
+        }
+
         if (g_grid_enabled.load()) {
             draw_coordinate_grid(frame, grid_step);
         }
@@ -1092,6 +1179,10 @@ int main(int argc, char* argv[]) {
     std::signal(SIGTERM, on_signal);
     g_running = true;
     g_inference_enabled = true;
+    {
+        std::lock_guard<std::mutex> lock(g_snapshot_mutex);
+        g_latest_snapshot = DetectionSnapshot{};
+    }
 
     StreamConfig config;
     switch (parse_args(argc, argv, config)) {
@@ -1121,6 +1212,7 @@ int main(int argc, char* argv[]) {
               << "NMS Kernel : " << config.nms_kernel << "\n"
               << "Input q + Enter to toggle inference\n"
               << "Input w + Enter to toggle coordinate grid\n"
+              << "Input e + Enter to export current frame spot coordinates\n"
               << "Press Ctrl+C to exit\n"
               << "========================================\n" << std::endl;
 

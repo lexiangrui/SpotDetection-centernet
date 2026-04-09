@@ -1,11 +1,11 @@
-# RK3576 部署指南
+# RK3576 部署说明
 
-## 1. 概述
+## 1. 目录概览
 
-本目录包含 RKNN 端 C++ 推理代码，提供两种入口：
+`deploy/` 目录是当前仓库的 RKNN C++ 部署端，包含两个可执行入口：
 
 - `spot_detect`：单张图片推理
-- `spot_stream`：摄像头采集 + 检测 + UDP 推流
+- `spot_stream`：摄像头采集、板端检测、UDP 推流
 
 目录结构：
 
@@ -15,56 +15,50 @@ deploy/
 ├── README.md
 ├── include/
 │   └── spot_detector.h
-├── src/
-│   ├── spot_detector.cpp
-│   ├── main.cpp
-│   └── main_stream.cpp
-└── model/
+├── model/
+│   ├── spot_centernet_resnet18_fp.rknn
+│   └── spot_centernet_resnet18_int8.rknn
+└── src/
+    ├── main.cpp
+    ├── main_stream.cpp
+    └── spot_detector.cpp
 ```
 
-## 2. 当前端侧代码的前提
+## 2. 当前部署端和模型的对应关系
 
-当前 [spot_detector.cpp](/Users/lexiangrui/Desktop/光斑定位-centernet/deploy/src/spot_detector.cpp) 对模型输出有明确假设：
+当前部署端是按仓库里的这一套模型接口：
 
-- 只有 2 个输出：`heatmap`、`reg`
-- 当前开发端模型 stride 仍为 `4`
-- C++ 端会优先读取 RKNN 实际输入/输出张量尺寸，不再把 `640 x 640 / 160 x 160` 写死
-- 当前主配置 [spot_centernet.yaml](/Users/lexiangrui/Desktop/光斑定位-centernet/configs/spot_centernet.yaml) 对应输入是 `640 x 480`，输出是 `160 x 120`
+- 输入：RGB letterbox 到模型输入尺寸
+- 输出 1：`heatmap`
+- 输出 2：`reg`
+- 输出分辨率：`H/4 x W/4`
 
-也就是说，端侧代码目前适配的是标准 CenterNet 风格 `H/4 x W/4` 的 `heatmap + reg` 输出；如果后续改成其他输出头或全分辨率输出，仍需要同步改 C++ 后处理。
+部署端会在运行时主动查询 RKNN 实际张量尺寸，但当前主配置 `configs/spot_centernet.yaml` 对应的默认尺寸仍然是：
 
-预处理使用 RGB letterbox：
+- 输入：`640 x 480`
+- 输出：`160 x 120`
 
-- 等比例缩放
-- padding 到模型输入尺寸
+`spot_detector.cpp` 当前已经支持两条模型输入路径：
 
-后处理再把坐标映射回原图。
+- `INT8` 模型：直接喂 `uint8 RGB` letterbox 图，均值方差由 RKNN 侧融合
+- `FP16/FP32` 模型：先在 CPU 上做 ImageNet mean/std 归一化，再喂浮点输入
 
-## 3. 当前代码和部署的关系
+这也是为什么 `deploy/model/` 里现在同时放了：
 
-主仓库当前固定使用：
+- `spot_centernet_resnet18_int8.rknn`
+- `spot_centernet_resnet18_fp.rknn`
 
-- `resnet18 + CenterNet-style conv/deconv decoder`
+## 3. 开发机导出 RKNN
 
-并且：
+在仓库根目录执行。
 
-- 当前路径只使用标准卷积和反卷积
-- 当前代码已经不再依赖 `torchvision.ops.DeformConv2d`
-
-这会直接影响部署：
-
-- 不再存在 `DeformConv2d` 导致的 MPS / ONNX 限制
-- 导出的 ONNX/RKNN 都以当前这条 `resnet18` 路径为准
-
-## 4. 开发机上准备 RKNN 模型
-
-安装：
+安装 RKNN Toolkit：
 
 ```bash
 pip install rknn-toolkit2 --extra-index-url https://download.rockchip.com/rknn/rknn-toolkit2/latest/
 ```
 
-### 4.1 导出 ONNX
+### 3.1 导出 ONNX
 
 ```bash
 python scripts/export_onnx.py \
@@ -72,7 +66,7 @@ python scripts/export_onnx.py \
   --output outputs/best.onnx
 ```
 
-### 4.2 导出 RKNN
+### 3.2 导出 INT8 RKNN
 
 ```bash
 python scripts/export_rknn.py \
@@ -81,13 +75,13 @@ python scripts/export_rknn.py \
   --quantize int8
 ```
 
-或不量化：
+### 3.3 导出 FP16 RKNN
 
 ```bash
 python scripts/export_rknn.py \
   --checkpoint models/spot_centernet_resnet18_focal/best.pt \
   --output deploy/model/spot_centernet_resnet18_fp.rknn \
-  --quantize fp32
+  --quantize fp16
 ```
 
 也可以复用已有 ONNX：
@@ -95,49 +89,39 @@ python scripts/export_rknn.py \
 ```bash
 python scripts/export_rknn.py \
   --onnx outputs/best.onnx \
-  --output deploy/model/spot_centernet_resnet18_int8.rknn
+  --output deploy/model/spot_centernet_resnet18_int8.rknn \
+  --quantize int8
 ```
 
-`export_rknn.py` 当前会自动：
+当前 `export_rknn.py` 的实际行为：
 
-- 从 `splits/val.txt` 读取标定样本
-- 做统一预处理
-- 在 `.calib_cache/` 下缓存 `.npy/.txt`
-- 再调用 RKNN Toolkit 转换
+- 需要时先导出 ONNX
+- `int8` 模式从 `splits/val.txt` 读取标定样本
+- 标定数据会缓存到 `.calib_cache/`
+- `fp16` 模式跳过标定
 
-常用参数：
+## 4. 板端准备
 
-| 参数 | 默认值 | 说明 |
-| --- | --- | --- |
-| `--platform` | `rk3576` | 目标平台 |
-| `--calib-size` | `100` | 标定图数量 |
-| `--calib-split` | `splits/val.txt` | 标定样本来源 |
-| `--photos-dir` | `photos` | 图片目录 |
-| `--reuse-calib` | 关闭 | 复用缓存标定数据 |
-
-## 5. 将文件传到板卡
-
-需要复制：
+需要带到板卡上的最小集合：
 
 - `deploy/` 整个目录
 - `.rknn` 模型文件
-- 测试图片或视频
+- 测试图片，或可访问的摄像头设备
 
-## 6. 编译
-
-依赖：
+板端依赖：
 
 - RKNN Runtime
 - OpenCV 4.x
 - CMake 3.10+
 - C++17 编译器
-- GStreamer 1.0 + `gstreamer-app-1.0`（仅 `spot_stream`）
+- GStreamer 1.0 与 `gstreamer-app-1.0`（只在构建 `spot_stream` 时需要）
 
-编译：
+## 5. 编译
 
 ```bash
 cd deploy
-mkdir -p build && cd build
+mkdir -p build
+cd build
 
 cmake .. \
   -G Ninja \
@@ -147,9 +131,21 @@ cmake .. \
 ninja
 ```
 
-## 7. 运行
+当前 `CMakeLists.txt` 的行为：
 
-### 7.1 单张图片
+- 总是构建静态库 `spot_detector`
+- 总是构建 `spot_detect`
+- 只有检测到 GStreamer 时才构建 `spot_stream`
+
+如果找不到 RKNN Runtime，可以显式传：
+
+```bash
+cmake .. -DRKNN_API_PATH=/path/to/rknn/runtime
+```
+
+## 6. 运行单图推理
+
+命令：
 
 ```bash
 ./spot_detect <rknn_model> <image_path> [score_threshold] [topk] [nms_kernel]
@@ -159,20 +155,29 @@ ninja
 
 ```bash
 ./spot_detect ../model/spot_centernet_resnet18_int8.rknn test.jpg
-./spot_detect ../model/spot_centernet_resnet18_int8.rknn test.jpg 0.3 256 5
+./spot_detect ../model/spot_centernet_resnet18_fp.rknn test.jpg 0.3 256 5
 ```
 
-输出：
+输出行为：
 
-- 终端打印检测坐标
-- 保存 `result.jpg`
+- 终端打印检测数量和每个光斑坐标
+- 生成 `result.jpg`
 
-### 7.2 实时推流
+坐标显示习惯：
+
+- 检测内部仍按图像坐标处理
+- 终端与画面上显示的 `y` 会转换成 `H - y`
+- 编号按“从上到下、从左到右”排序
+
+## 7. 运行实时推流
+
+命令：
 
 ```bash
 ./spot_stream [--model <path>] [--ip <addr>] [--camera <index>] [--threshold <float>] \
-              [--topk <int>] [--nms-kernel <int>] [--video-mode <low|medium|high>] \
-              [--fps <int>] [--width <int>] [--height <int>] [--grid-step <int>]
+              [--topk <int>] [--nms-kernel <int>] [--grid-step <int>] \
+              [--video-mode <low|medium|high>] [--width <int>] [--height <int>] \
+              [--fps <int>]
 ```
 
 示例：
@@ -180,7 +185,9 @@ ninja
 ```bash
 ./spot_stream
 ./spot_stream --model ./model/spot_centernet_resnet18_int8.rknn --ip 192.168.99.230
-./spot_stream --camera 22 --threshold 0.1 --topk 256 --nms-kernel 9 --video-mode low --fps 30
+./spot_stream --video-mode medium --fps 30 --grid-step 200
+./spot_stream --video-mode high --fps 15 --grid-step 200
+./spot_stream --width 2112 --height 1568 --fps 15
 ```
 
 默认参数：
@@ -193,75 +200,42 @@ ninja
 | `score_threshold` | `0.3` |
 | `topk` | `256` |
 | `nms_kernel` | `5` |
+| `grid_step` | `100` |
 | `video_mode` | `low` |
 | `fps` | `30` |
-| `grid_step` | `100` |
 
 分辨率预设：
 
-| `video_mode` | 分辨率 |
+| 预设 | 分辨率 |
 | --- | --- |
 | `low` | `1920 x 1080` |
 | `medium` | `2112 x 1568` |
 | `high` | `4224 x 3136` |
 
-### 7.3 高分辨采集说明
+运行时控制：
 
-这块 RK3576 板卡上的 `OV13850 -> CSI -> CIF -> RKISP -> /dev/video22` 链路，不能只靠：
+- 输入 `q` 回车：开关检测，视频流不断
+- 输入 `w` 回车：开关坐标网格
+- 输入 `e` 回车：导出当前帧坐标到 `spot_coords_frame_<frame>_<timestamp>.txt`
 
-```bash
-./spot_stream --video-mode high --fps 15
-```
+UDP 推流端口固定为 `5000`。
 
-里对 `/dev/video22` 的宽高请求，就稳定切到 `4224 x 3136`。实际排查结果是：
+## 8. 高分辨模式说明
 
-- `2112 x 1568` 是当前 BSP 下更常见的默认视频模式
-- `4224 x 3136` 要先把上游 subdev 链路切到高分辨率，再打开 `/dev/video22`
-- 单纯对 `/dev/video22` 做 `VIDIOC_S_FMT`，很容易仍停留在低分辨率，或者被驱动退回
+`--video-mode high` 不是单纯把 `/dev/video22` 的宽高改成 `4224 x 3136`。
 
-当前 [main_stream.cpp]已经内置了这套板卡专用的高分辨预配置逻辑：
+当前 `main_stream.cpp` 已经内置了板卡专用的 subdev 预配置逻辑，会在打开视频节点前先尝试切换：
 
-- `/dev/v4l-subdev2`：`sensor source`
-- `/dev/v4l-subdev1`：`dphy sink`
-- `/dev/v4l-subdev0`：`csi sink`
-- `/dev/v4l-subdev5`：`cif source`
-- `/dev/v4l-subdev4`：`isp sink`
-- `/dev/v4l-subdev4` pad `2`：`isp mainpath source`
+- `/dev/v4l-subdev2`：sensor source
+- `/dev/v4l-subdev1`：dphy sink
+- `/dev/v4l-subdev0`：csi sink
+- `/dev/v4l-subdev5`：cif source
+- `/dev/v4l-subdev4`：isp sink / mainpath source
 
-也就是说，`--video-mode high` 的真实流程不是“只改一组宽高”，而是：
+也就是说，高分辨模式的真实流程是：
 
-1. 先把上游 sensor / CSI / ISP 的 active format 切到 `4224 x 3136`
+1. 先切 sensor / CSI / ISP 链路格式
 2. 等链路稳定
 3. 再打开 `/dev/video22`
-4. 再对视频节点协商像素格式和缓冲区
+4. 再申请 buffer 并开始采集
 
-如果高分辨启动成功，日志里应看到类似：
-
-```text
-[Subdev] Pre-configuring OV13850/RKISP pipeline for 4224x3136
-[Subdev] sensor source -> /dev/v4l-subdev2 ...
-[Subdev] dphy sink -> /dev/v4l-subdev1 ...
-[Subdev] csi sink -> /dev/v4l-subdev0 ...
-[Subdev] cif source -> /dev/v4l-subdev5 ...
-[Subdev] isp sink -> /dev/v4l-subdev4 ...
-[Subdev] isp mainpath source -> /dev/v4l-subdev4 pad=2 ...
-[Capture] Started, device=/dev/video22 requested=4224x3136@15 actual=4224x3136 fmt=NV12 fps=15
-```
-
-
-
-## 8. 模型接口要求
-
-当前 C++ 端要求模型满足：
-
-- 输入：RGB letterbox 到固定尺寸
-- 输出：
-  - 当前主配置下 `heatmap [1,1,120,160]`
-  - 当前主配置下 `reg [1,2,120,160]`
-- 坐标语义：CenterNet `heatmap + reg`
-
-如果你改了这些任一项，`deploy/src/spot_detector.cpp` 也要一起改。
-
-## 9. 使用建议
-
-如果你的目标是“这条分支直接导出 RKNN 并部署”，当前仓库默认就是这条固定的 `resnet18` 路径，训练、导出和板端推理都应保持与同一份 checkpoint 对齐。

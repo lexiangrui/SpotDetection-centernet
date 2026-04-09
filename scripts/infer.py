@@ -12,7 +12,7 @@ from centernet_spot.decode import decode_predictions
 from centernet_spot.model import SpotCenterNet
 from centernet_spot.preprocessing import preprocess_image
 from centernet_spot.transforms import build_resize_pad_transform
-from centernet_spot.utils import ensure_dir, get_device, save_json
+from centernet_spot.utils import assign_spot_ids, ensure_dir, get_device, save_json
 from centernet_spot.visualization import (
     draw_detections_cross,
     make_heatmap_vis,
@@ -94,6 +94,7 @@ def process_image(
         model=model, image=image, cfg=cfg, device=device,
         score_threshold=score_threshold, topk=topk, nms_kernel=nms_kernel,
     )
+    detections = assign_spot_ids(detections, image.shape[0])
 
     stem = image_path.stem
     vis = make_visualization(image, outputs["heatmap"], detections, output_transform)
@@ -156,6 +157,7 @@ def process_video(
                 model=model, image=frame, cfg=cfg, device=device,
                 score_threshold=score_threshold, topk=topk, nms_kernel=nms_kernel,
             )
+            detections = assign_spot_ids(detections, frame.shape[0])
             vis = make_visualization(frame, outputs["heatmap"], detections, output_transform)
 
             if writer is None:

@@ -39,6 +39,24 @@ def save_json(path: str | Path, data: Any) -> None:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
+def assign_spot_ids(detections: list[dict], _image_height: int) -> list[dict]:
+    ordered = sorted(
+        detections,
+        key=lambda det: (
+            int(round(float(det["y"]))),
+            int(round(float(det["x"]))),
+            -float(det["score"]),
+        ),
+    )
+
+    numbered: list[dict] = []
+    for index, det in enumerate(ordered, start=1):
+        item = dict(det)
+        item["spot_id"] = index
+        numbered.append(item)
+    return numbered
+
+
 def get_input_normalization(_cfg: dict | None = None) -> tuple[np.ndarray, np.ndarray]:
     return IMAGENET_MEAN.copy(), IMAGENET_STD.copy()
 

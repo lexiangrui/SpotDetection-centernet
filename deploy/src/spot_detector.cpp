@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -40,6 +41,25 @@ static std::vector<uint8_t> load_file(const std::string& path) {
     return buf;
 }
 
+static void assign_detection_ids(std::vector<Detection>& detections) {
+    std::sort(detections.begin(), detections.end(),
+              [](const Detection& lhs, const Detection& rhs) {
+                  const int lhs_y = static_cast<int>(std::lround(lhs.y));
+                  const int rhs_y = static_cast<int>(std::lround(rhs.y));
+                  if (lhs_y != rhs_y) return lhs_y < rhs_y;
+
+                  const int lhs_x = static_cast<int>(std::lround(lhs.x));
+                  const int rhs_x = static_cast<int>(std::lround(rhs.x));
+                  if (lhs_x != rhs_x) return lhs_x < rhs_x;
+
+                  return lhs.score > rhs.score;
+              });
+
+    for (size_t i = 0; i < detections.size(); ++i) {
+        detections[i].id = static_cast<int>(i) + 1;
+    }
+}
+
 // Normalize uint8 NHWC RGB canvas to float32 in-place for fp32 model input.
 static void normalize_canvas_uint8_to_float(const uint8_t* u8_data, float* float_data,
                                              int pixel_count,
@@ -50,6 +70,74 @@ static void normalize_canvas_uint8_to_float(const uint8_t* u8_data, float* float
         float_data[base + 0] = (static_cast<float>(u8_data[base + 0]) / 255.0f - mean[0]) * inv_std[0];
         float_data[base + 1] = (static_cast<float>(u8_data[base + 1]) / 255.0f - mean[1]) * inv_std[1];
         float_data[base + 2] = (static_cast<float>(u8_data[base + 2]) / 255.0f - mean[2]) * inv_std[2];
+    }
+}
+
+static const char* tensor_type_name(rknn_tensor_type type) {
+    switch (type) {
+    case RKNN_TENSOR_FLOAT16: return "FLOAT16";
+    case RKNN_TENSOR_FLOAT32: return "FLOAT32";
+    case RKNN_TENSOR_UINT8: return "UINT8";
+    case RKNN_TENSOR_INT8: return "INT8";
+    default: return "OTHER";
+    }
+}
+
+static const char* qnt_type_name(rknn_tensor_qnt_type qnt_type) {
+    switch (qnt_type) {
+    case RKNN_TENSOR_QNT_NONE: return "NONE";
+    case RKNN_TENSOR_QNT_DFP: return "DFP";
+    case RKNN_TENSOR_QNT_AFFINE_ASYMMETRIC: return "AFFINE_ASYMMETRIC";
+    default: return "OTHER";
+    }
+}
+
+static uint16_t float32_to_float16_bits(float value) {
+    union {
+        float f;
+        uint32_t u;
+    } in{};
+    in.f = value;
+
+    const uint32_t sign = (in.u >> 16) & 0x8000u;
+    int32_t exp = static_cast<int32_t>((in.u >> 23) & 0xffu) - 127 + 15;
+    uint32_t mantissa = in.u & 0x7fffffu;
+
+    if (exp <= 0) {
+        if (exp < -10) return static_cast<uint16_t>(sign);
+        mantissa = (mantissa | 0x800000u) >> (1 - exp);
+        if (mantissa & 0x1000u) mantissa += 0x2000u;
+        return static_cast<uint16_t>(sign | (mantissa >> 13));
+    }
+
+    if (exp >= 31) {
+        return static_cast<uint16_t>(sign | 0x7c00u);
+    }
+
+    if (mantissa & 0x1000u) {
+        mantissa += 0x2000u;
+        if (mantissa & 0x800000u) {
+            mantissa = 0;
+            ++exp;
+            if (exp >= 31) return static_cast<uint16_t>(sign | 0x7c00u);
+        }
+    }
+
+    return static_cast<uint16_t>(sign | (static_cast<uint32_t>(exp) << 10) | (mantissa >> 13));
+}
+
+static void normalize_canvas_uint8_to_float16(const uint8_t* u8_data, uint16_t* float16_data,
+                                              int pixel_count,
+                                              const float mean[3], const float std[3]) {
+    const float inv_std[3] = {1.0f / std[0], 1.0f / std[1], 1.0f / std[2]};
+    for (int i = 0; i < pixel_count; ++i) {
+        int base = i * 3;
+        float v0 = (static_cast<float>(u8_data[base + 0]) / 255.0f - mean[0]) * inv_std[0];
+        float v1 = (static_cast<float>(u8_data[base + 1]) / 255.0f - mean[1]) * inv_std[1];
+        float v2 = (static_cast<float>(u8_data[base + 2]) / 255.0f - mean[2]) * inv_std[2];
+        float16_data[base + 0] = float32_to_float16_bits(v0);
+        float16_data[base + 1] = float32_to_float16_bits(v1);
+        float16_data[base + 2] = float32_to_float16_bits(v2);
     }
 }
 
@@ -65,6 +153,7 @@ int SpotDetector::init(const std::string& model_path, int input_w, int input_h) 
     heatmap_output_index_ = 0;
     reg_output_index_ = 1;
     reg_output_is_nhwc_ = false;
+    input_tensor_type_ = RKNN_TENSOR_UINT8;
 
     auto model_data = load_file(model_path);
     if (model_data.empty()) {
@@ -99,6 +188,7 @@ int SpotDetector::init(const std::string& model_path, int input_w, int input_h) 
                     input_w_ = model_input_w;
                     input_h_ = model_input_h;
                 }
+                input_tensor_type_ = attr.type;
 
                 // Prefer the runtime tensor dtype over qnt_type when deciding how to feed input.
                 // Some "fp" RKNN exports still carry affine quantization metadata while exposing
@@ -118,9 +208,9 @@ int SpotDetector::init(const std::string& model_path, int input_w, int input_h) 
                 printf("[INFO] Input[0]: name=%s, dims=[%u,%u,%u,%u], type=%d, fmt=%d, qnt=%d, zp=%d, scale=%.4f\n",
                        attr.name, attr.dims[0], attr.dims[1], attr.dims[2], attr.dims[3],
                        attr.type, attr.fmt, attr.qnt_type, attr.zp, attr.scale);
-                printf("[INFO] Model type: %s  (qnt_type=%d)\n",
+                printf("[INFO] Model type: %s  (input_type=%s, qnt_type=%s)\n",
                        is_int8_model_ ? "integer input" : "floating-point input",
-                       attr.qnt_type);
+                       tensor_type_name(attr.type), qnt_type_name(attr.qnt_type));
                 printf("[INFO] Detector input size: %dx%d\n", input_w_, input_h_);
             } else if (input_w_ <= 0 || input_h_ <= 0) {
                 fprintf(stderr, "[ERR] Failed to query input tensor and no fallback size provided\n");
@@ -298,7 +388,7 @@ void SpotDetector::postprocess(const float* heatmap_data, const float* reg,
         float orig_x = (feat_x - out_pad_left) / std::max(out_sx, 1e-8f);
         float orig_y = (feat_y - out_pad_top)  / std::max(out_sy, 1e-8f);
 
-        detections.push_back({orig_x, orig_y, score});
+        detections.push_back({0, orig_x, orig_y, score});
     }
 }
 
@@ -323,9 +413,18 @@ std::vector<Detection> SpotDetector::detect(const cv::Mat& image_bgr,
         inputs[0].type = RKNN_TENSOR_UINT8;
         inputs[0].size = static_cast<uint32_t>(canvas.total() * canvas.elemSize());
         inputs[0].buf  = canvas.data;
+    } else if (input_tensor_type_ == RKNN_TENSOR_FLOAT16) {
+        // FLOAT16 model: normalize on CPU, then feed native fp16 buffer.
+        static thread_local std::vector<uint16_t> float16_buf;
+        float16_buf.resize(canvas.total() * 3);
+        normalize_canvas_uint8_to_float16(canvas.data, float16_buf.data(),
+                                          static_cast<int>(canvas.total()),
+                                          mean_, std_);
+        inputs[0].type = RKNN_TENSOR_FLOAT16;
+        inputs[0].size = static_cast<uint32_t>(float16_buf.size() * sizeof(uint16_t));
+        inputs[0].buf  = float16_buf.data();
     } else {
-        // FP32 non-quantized model: input float32, normalization done on CPU.
-        // Allocate float buffer (reused across calls, minimal allocation cost vs inference cost).
+        // FLOAT32 model: input float32, normalization done on CPU.
         static thread_local std::vector<float> float_buf;
         float_buf.resize(canvas.total() * 3);
         normalize_canvas_uint8_to_float(canvas.data, float_buf.data(),
@@ -366,6 +465,7 @@ std::vector<Detection> SpotDetector::detect(const cv::Mat& image_bgr,
 
     postprocess(heatmap, reg, out_h, out_w, info,
                 score_threshold, topk, nms_kernel, detections);
+    assign_detection_ids(detections);
 
     rknn_outputs_release(ctx_, 2, outputs);
     return detections;

@@ -17,25 +17,16 @@ static void draw_crosshair(cv::Mat& canvas, int cx, int cy,
              color, thickness, cv::LINE_AA);
 }
 
-static std::string make_detection_label(const cv::Mat& image, const Detection& det) {
-    int x = std::clamp(static_cast<int>(std::lround(det.x)), 0, image.cols);
-    int y = std::clamp(static_cast<int>(std::lround(static_cast<double>(image.rows) - det.y)), 0, image.rows);
-    char label[96];
-    snprintf(label, sizeof(label), "x=%d y=%d s=%.2f", x, y, det.score);
-    return std::string(label);
-}
-
 static void draw_label(cv::Mat& image, const std::string& label, cv::Point origin,
-                       double font_scale, int thickness, const cv::Scalar& color) {
+                       double font_scale, int thickness, const cv::Scalar& color,
+                       bool align_right = false) {
     int baseline = 0;
     cv::Size text_size = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, font_scale, thickness, &baseline);
+    if (align_right) {
+        origin.x -= text_size.width;
+    }
     int x = std::max(0, std::min(origin.x, image.cols - text_size.width - 4));
     int y = std::max(text_size.height + 4, std::min(origin.y, image.rows - baseline - 4));
-    cv::rectangle(image,
-                  cv::Point(x - 2, y - text_size.height - 2),
-                  cv::Point(x + text_size.width + 2, y + baseline + 2),
-                  cv::Scalar(0, 0, 0),
-                  cv::FILLED);
     cv::putText(image, label, cv::Point(x, y),
                 cv::FONT_HERSHEY_SIMPLEX, font_scale, color, thickness, cv::LINE_AA);
 }
@@ -44,16 +35,27 @@ static void draw_detections(cv::Mat& image, const std::vector<Detection>& dets) 
     int min_side = std::min(image.rows, image.cols);
     int marker_size = std::max(6, static_cast<int>(std::round(min_side * 0.012)));
     int marker_thickness = std::max(1, static_cast<int>(std::round(marker_size / 4.5)));
-    double font_scale = std::max(0.36, marker_size / 15.0);
-    int text_thickness = std::max(1, marker_thickness);
+    double font_scale = std::max(0.24, marker_size / 21.0);
+    int text_thickness = std::min(3, std::max(1, static_cast<int>(std::round(min_side / 1200.0))));
     cv::Scalar color(0, 255, 0);
 
     for (const auto& det : dets) {
         int cx = static_cast<int>(std::round(det.x));
         int cy = static_cast<int>(std::round(det.y));
+        int display_x = std::clamp(static_cast<int>(std::lround(det.x)), 0, image.cols);
+        int display_y = std::clamp(static_cast<int>(std::lround(static_cast<double>(image.rows) - det.y)), 0, image.rows);
+        int offset = std::max(4, marker_size - 1);
+        int lower_y = cy + std::max(8, marker_size + 2);
+
         draw_crosshair(image, cx, cy, marker_size, color, marker_thickness);
-        draw_label(image, make_detection_label(image, det),
-                   cv::Point(cx + marker_size + 4, cy - std::max(marker_size / 2, 4)),
+        draw_label(image, "#" + std::to_string(det.id),
+                   cv::Point(cx - offset, cy - offset),
+                   font_scale, text_thickness, color, true);
+        draw_label(image, "(" + std::to_string(display_x) + "," + std::to_string(display_y) + ")",
+                   cv::Point(cx + offset, cy - offset),
+                   font_scale, text_thickness, color);
+        draw_label(image, "s=" + cv::format("%.2f", det.score),
+                   cv::Point(cx + offset, lower_y),
                    font_scale, text_thickness, color);
     }
 }
@@ -86,10 +88,10 @@ int main(int argc, char* argv[]) {
     auto dets = detector.detect(image, score_threshold, topk, nms_kernel);
     printf("[INFO] Detected %zu spots in %s\n", dets.size(), image_path.c_str());
 
-    for (size_t i = 0; i < dets.size(); ++i) {
-        float display_x = dets[i].x;
-        float display_y = static_cast<float>(image.rows) - dets[i].y;
-        printf("  [%zu] x=%.2f y=%.2f score=%.4f\n", i, display_x, display_y, dets[i].score);
+    for (const auto& det : dets) {
+        float display_x = det.x;
+        float display_y = static_cast<float>(image.rows) - det.y;
+        printf("  [%d] x=%.2f y=%.2f score=%.4f\n", det.id, display_x, display_y, det.score);
     }
 
     draw_detections(image, dets);
