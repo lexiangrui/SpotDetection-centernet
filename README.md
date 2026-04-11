@@ -48,6 +48,9 @@
 光斑定位-centernet/
 ├── configs/
 │   └── spot_centernet.yaml
+├── dataset/
+│   ├── train/
+│   └── val/
 ├── deploy/
 │   ├── README.md
 │   ├── CMakeLists.txt
@@ -56,11 +59,9 @@
 │   └── src/
 ├── docs/
 │   └── 定位抖动修正说明.md
-├── labels_raw/
 ├── models/
 │   └── spot_centernet_resnet18_focal/
 ├── outputs/
-├── photos/
 ├── scripts/
 │   ├── train.py
 │   ├── infer.py
@@ -96,20 +97,27 @@ python -c "import torch; print(torch.__version__); print('cuda=', torch.cuda.is_
 
 ## 5. 数据格式
 
-图片放在 `photos/`，标注放在 `labels_raw/`。
+默认训练数据位于 `dataset/`，按显式训练/验证目录组织：
+
+```text
+dataset/
+├── train/
+│   ├── images/
+│   │   ├── xxx.jpg
+│   │   └── xxx.json
+│   └── labels/        # 可选：原始 YOLO pose txt
+└── val/
+    ├── images/
+    │   ├── yyy.jpg
+    │   └── yyy.json
+    └── labels/
+```
 
 标注约定：
 
-- 光斑中心：`label = "spot"`，`shape_type = "point"`
-- 光斑代表尺寸：`label = "spot_size"`，`shape_type = "line"`
+- 光斑中心：`label = "centroid"`，`shape_type = "point"`
 
-如果用 Labelme 标注：
-
-```bash
-labelme photos/ --output labels_raw/
-```
-
-当前训练数据加载逻辑会读取 `labels_raw/*.json`，自动发现有标注的样本，并在训练前重写：
+当前训练数据加载逻辑会读取 `dataset/train/images/*.json` 和 `dataset/val/images/*.json` 中的 `centroid` 点标注，并在训练前重写：
 
 - `splits/train.txt`
 - `splits/val.txt`
@@ -171,7 +179,7 @@ python scripts/infer.py \
 python scripts/infer.py \
   --config configs/spot_centernet.yaml \
   --checkpoint models/spot_centernet_resnet18_focal/best.pt \
-  --input photos \
+  --input dataset/val/images \
   --output outputs/infer_all
 ```
 
@@ -188,7 +196,7 @@ python scripts/infer.py \
 推理输出说明：
 
 - 图片输出：`{name}_vis.jpg` 和 `{name}.json`
-- 视频输出：`{name}_vis.mp4` 或 `{name}_vis.avi`，以及 `{name}.json`
+- 视频输出：`{name}_vis.mp4` 或 `{name}_vis.avi`、`{name}_annotated.mp4` 或 `{name}_annotated.avi`，以及 `{name}.json`
 - 可视化图是三栏拼图：原图 / 恢复到原尺寸的热力图 / 检测标注图
 
 JSON 中每个检测结果会带：

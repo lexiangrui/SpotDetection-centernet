@@ -6,8 +6,9 @@ import torch
 import torch.nn.functional as F
 
 
-def heatmap_mse_loss(pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
-    """前景 MSE 损失：仅在 GT 前景区域 (gt > 0) 计算。"""
+def heatmap_mse_loss(logits: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
+    """前景 MSE 损失：对 logits 做 sigmoid 后仅在 GT 前景区域计算。"""
+    pred = logits.sigmoid()
     fg_mask = (gt > 0).float()
     valid_count = fg_mask.sum()
     if valid_count <= 0:
@@ -17,21 +18,20 @@ def heatmap_mse_loss(pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
     return (sq_error * fg_mask).sum() / valid_count
 
 
-def heatmap_bce_loss(pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
-    """标准 BCE 损失：在全图所有像素上计算。"""
-    pred = pred.clamp(1e-4, 1 - 1e-4)
-    return F.binary_cross_entropy(pred, gt, reduction="mean")
+def heatmap_bce_loss(logits: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
+    """标准 BCEWithLogits 损失：直接在 logits 上计算。"""
+    return F.binary_cross_entropy_with_logits(logits, gt, reduction="mean")
 
 
-def focal_loss(pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
-    """Focal Loss：减少简单负样本的影响，增强难样本学习。"""
-    pred = pred.clamp(1e-4, 1 - 1e-4)
+def focal_loss(logits: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
+    """CenterNet 风格 Focal Loss：直接在 logits 上计算。"""
+    pred = logits.sigmoid()
     pos_inds = gt.eq(1).float()
     neg_inds = gt.lt(1).float()
     neg_weights = torch.pow(1 - gt, 4)
 
-    pos_loss = torch.log(pred) * torch.pow(1 - pred, 2) * pos_inds
-    neg_loss = torch.log(1 - pred) * torch.pow(pred, 2) * neg_weights * neg_inds
+    pos_loss = F.logsigmoid(logits) * torch.pow(1 - pred, 2) * pos_inds
+    neg_loss = F.logsigmoid(-logits) * torch.pow(pred, 2) * neg_weights * neg_inds
 
     num_pos = pos_inds.sum()
     pos_loss = pos_loss.sum()
@@ -42,8 +42,9 @@ def focal_loss(pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
     return -(pos_loss + neg_loss) / num_pos
 
 
-def kl_divergence_loss(pred: torch.Tensor, gt: torch.Tensor, eps: float = 1e-7) -> torch.Tensor:
-    """KL 散度损失：将热力图归一化为概率分布后匹配。"""
+def kl_divergence_loss(logits: torch.Tensor, gt: torch.Tensor, eps: float = 1e-7) -> torch.Tensor:
+    """KL 散度损失：对 logits 做 sigmoid 后再归一化为概率分布进行匹配。"""
+    pred = logits.sigmoid()
     pred = pred + eps
     pred = pred / pred.sum(dim=[2, 3], keepdim=True)
 

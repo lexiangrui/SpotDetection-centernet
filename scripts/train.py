@@ -24,7 +24,7 @@ from centernet_spot.evaluation import (
     select_best_threshold_metrics,
 )
 from centernet_spot.losses import get_heatmap_loss, reg_l1_loss
-from centernet_spot.model import SpotCenterNet
+from centernet_spot.model import SpotCenterNet, heatmap_probs_from_logits
 from centernet_spot.split import discover_labeled_ids, make_train_val_split, write_split_file
 from centernet_spot.transforms import build_resize_pad_transform
 from centernet_spot.utils import ensure_dir, get_device, save_json, set_seed
@@ -42,16 +42,21 @@ LOGGER_NAME = "centernet_spot.train"
 
 def refresh_splits(cfg: dict) -> dict[str, int]:
     data_cfg = cfg["data"]
+    dataset_layout = str(data_cfg.get("dataset_layout", "legacy"))
     root = Path(data_cfg["root"])
-    label_dir = root / data_cfg["label_dir"]
     split_dir = ensure_dir(root / data_cfg["split_dir"])
-
-    sample_ids = discover_labeled_ids(label_dir)
-    train_ids, val_ids = make_train_val_split(
-        sample_ids,
-        val_ratio=float(data_cfg["val_ratio"]),
-        seed=int(cfg["seed"]),
-    )
+    if dataset_layout == "split_dirs":
+        train_ids = discover_labeled_ids(root / data_cfg["train_image_dir"])
+        val_ids = discover_labeled_ids(root / data_cfg["val_image_dir"])
+        sample_ids = sorted(set(train_ids) | set(val_ids))
+    else:
+        label_dir = root / data_cfg["label_dir"]
+        sample_ids = discover_labeled_ids(label_dir)
+        train_ids, val_ids = make_train_val_split(
+            sample_ids,
+            val_ratio=float(data_cfg["val_ratio"]),
+            seed=int(cfg["seed"]),
+        )
 
     write_split_file(split_dir / data_cfg["train_split"], train_ids)
     write_split_file(split_dir / data_cfg["val_split"], val_ids)
@@ -187,7 +192,7 @@ def run_epoch(
         gt_mask = batch["reg_mask"].to(device)
 
         outputs = model(images)
-        hm_loss = heatmap_loss_fn(outputs["heatmap"], gt_heatmap)
+        hm_loss = heatmap_loss_fn(outputs["heatmap_logits"], gt_heatmap)
         reg_loss = reg_l1_loss(outputs["reg"], gt_reg, gt_ind, gt_mask)
         loss = (
             hm_loss * float(cfg["train"]["heatmap_loss_weight"])
@@ -259,8 +264,7 @@ def resolve_eval_cfg(cfg: dict) -> dict[str, float | int | list[float]]:
         "score_thresholds": score_thresholds,
         "topk": int(eval_cfg.get("topk", infer_cfg.get("topk", 256))),
         "nms_kernel": int(eval_cfg.get("nms_kernel", infer_cfg.get("nms_kernel", 5))),
-        "match_radius_scale": float(eval_cfg.get("match_radius_scale", 0.3)),
-        "min_match_radius": float(eval_cfg.get("min_match_radius", 3.0)),
+        "match_radius": float(eval_cfg.get("match_radius", 6.0)),
     }
 
 
@@ -303,14 +307,13 @@ def evaluate_model(
         for batch in progress:
             images = batch["image"].to(device)
             outputs = model(images)
-            heatmaps = outputs["heatmap"]
+            heatmaps = heatmap_probs_from_logits(outputs["heatmap_logits"])
             regs = outputs["reg"]
             out_h, out_w = heatmaps.shape[-2:]
 
             orig_sizes = batch["orig_size"]
             gt_points = batch["gt_points"]
             gt_point_mask = batch["gt_point_mask"]
-            spot_diameter_orig = batch["spot_diameter_orig"]
 
             for sample_idx in range(images.shape[0]):
                 orig_w = int(orig_sizes[sample_idx, 0].item())
@@ -325,10 +328,7 @@ def evaluate_model(
                     nms_kernel=int(eval_cfg["nms_kernel"]),
                 )
                 valid_gt_points = gt_points[sample_idx][gt_point_mask[sample_idx].bool()].cpu().numpy()
-                match_radius = max(
-                    float(spot_diameter_orig[sample_idx].item()) * float(eval_cfg["match_radius_scale"]),
-                    float(eval_cfg["min_match_radius"]),
-                )
+                match_radius = float(eval_cfg["match_radius"])
 
                 predictions_by_image.append(detections)
                 gt_points_by_image.append(valid_gt_points.astype(np.float32))
@@ -439,7 +439,10 @@ def save_epoch_visualization(
     input_bgr = tensor_to_bgr(images[0], cfg)
     height, width = input_bgr.shape[:2]
     gt_gray = heatmap_to_gray(gt_heatmap, (width, height))
-    pred_gray = heatmap_to_gray(outputs["heatmap"][0], (width, height))
+    pred_gray = heatmap_to_gray(
+        heatmap_probs_from_logits(outputs["heatmap_logits"])[0],
+        (width, height),
+    )
 
     panels = [
         add_panel_title(input_bgr, "Input Image"),

@@ -10,6 +10,10 @@ from .neck import ResNetCenterNetDecoder
 HEAD_CHANNELS = 48
 
 
+def heatmap_probs_from_logits(logits: torch.Tensor) -> torch.Tensor:
+    return logits.sigmoid()
+
+
 class SpotCenterNet(nn.Module):
     def __init__(self, *, load_pretrained_backbone: bool = True) -> None:
         super().__init__()
@@ -23,8 +27,8 @@ class SpotCenterNet(nn.Module):
     def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         features = self.backbone(x)
         feat = self.decoder(features)
-        heatmap = self.hm_head(feat).sigmoid()
+        heatmap_logits = self.hm_head(feat)
         return {
-            "heatmap": heatmap,
+            "heatmap_logits": heatmap_logits,
             "reg": self.reg_head(feat),
         }

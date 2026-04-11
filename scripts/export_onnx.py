@@ -8,7 +8,7 @@ import torch
 from torch import nn
 
 from centernet_spot.config import load_config
-from centernet_spot.model import SpotCenterNet
+from centernet_spot.model import SpotCenterNet, heatmap_probs_from_logits
 
 
 class OnnxExportWrapper(nn.Module):
@@ -18,7 +18,7 @@ class OnnxExportWrapper(nn.Module):
 
     def forward(self, images: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         outputs = self.model(images)
-        return outputs["heatmap"], outputs["reg"]
+        return heatmap_probs_from_logits(outputs["heatmap_logits"]), outputs["reg"]
 
 
 def resolve_config(args_config: str | None, checkpoint: dict) -> dict:
@@ -97,7 +97,11 @@ def main() -> None:
 
     print(f"exported ONNX to {output_path}")
     print(f"input: images[{args.batch_size}, 3, {input_h}, {input_w}]")
-    print(f"outputs: heatmap{tuple(sample_outputs['heatmap'].shape)}, reg{tuple(sample_outputs['reg'].shape)}")
+    print(
+        "outputs: heatmap"
+        f"{tuple(heatmap_probs_from_logits(sample_outputs['heatmap_logits']).shape)}, "
+        f"reg{tuple(sample_outputs['reg'].shape)}"
+    )
 
 
 if __name__ == "__main__":

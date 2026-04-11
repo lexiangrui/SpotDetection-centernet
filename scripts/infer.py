@@ -9,7 +9,7 @@ import torch
 
 from centernet_spot.config import load_config
 from centernet_spot.decode import decode_predictions
-from centernet_spot.model import SpotCenterNet
+from centernet_spot.model import SpotCenterNet, heatmap_probs_from_logits
 from centernet_spot.preprocessing import preprocess_image
 from centernet_spot.transforms import build_resize_pad_transform
 from centernet_spot.utils import assign_spot_ids, ensure_dir, get_device, save_json
@@ -46,19 +46,21 @@ def infer_detections(
 
     with torch.no_grad():
         outputs = model(tensor)
+        heatmap = heatmap_probs_from_logits(outputs["heatmap_logits"])
         output_transform = build_resize_pad_transform(
             orig_w, orig_h,
-            outputs["heatmap"].shape[-1],
-            outputs["heatmap"].shape[-2],
+            heatmap.shape[-1],
+            heatmap.shape[-2],
         )
         detections = decode_predictions(
-            heatmap=outputs["heatmap"],
+            heatmap=heatmap,
             reg=outputs["reg"],
             transform=output_transform,
             topk=topk,
             score_threshold=float(score_threshold),
             nms_kernel=nms_kernel,
         )
+    outputs["heatmap"] = heatmap
     return outputs, detections, output_transform
 
 
@@ -71,8 +73,12 @@ def make_visualization(
     orig_h, orig_w = image.shape[:2]
     panel_left = image.copy()
     panel_mid = make_heatmap_vis(heatmap, output_transform, orig_h, orig_w)
-    panel_right = draw_detections_cross(image, detections)
+    panel_right = make_annotated_frame(image, detections)
     return make_three_panel(panel_left, panel_mid, panel_right)
+
+
+def make_annotated_frame(image: np.ndarray, detections: list[dict]) -> np.ndarray:
+    return draw_detections_cross(image, detections)
 
 
 def process_image(
@@ -108,11 +114,16 @@ def process_image(
     print(f"{image_path.name}: {len(detections)} detections")
 
 
-def create_video_writer(output_dir: Path, stem: str, fps: float,
-                        frame_size: tuple[int, int]) -> tuple[cv2.VideoWriter, Path]:
+def create_video_writer(
+    output_dir: Path,
+    stem: str,
+    suffix: str,
+    fps: float,
+    frame_size: tuple[int, int],
+) -> tuple[cv2.VideoWriter, Path]:
     candidates = [
-        (output_dir / f"{stem}_vis.mp4", "mp4v"),
-        (output_dir / f"{stem}_vis.avi", "MJPG"),
+        (output_dir / f"{stem}_{suffix}.mp4", "mp4v"),
+        (output_dir / f"{stem}_{suffix}.avi", "MJPG"),
     ]
     width, height = frame_size
     for output_path, codec in candidates:
@@ -143,8 +154,10 @@ def process_video(
         fps = 25.0
 
     frame_results: list[dict] = []
-    writer: cv2.VideoWriter | None = None
+    writer_vis: cv2.VideoWriter | None = None
     output_video_path: Path | None = None
+    writer_annotated: cv2.VideoWriter | None = None
+    annotated_video_path: Path | None = None
 
     try:
         frame_index = 0
@@ -158,13 +171,21 @@ def process_video(
                 score_threshold=score_threshold, topk=topk, nms_kernel=nms_kernel,
             )
             detections = assign_spot_ids(detections, frame.shape[0])
+            annotated = make_annotated_frame(frame, detections)
             vis = make_visualization(frame, outputs["heatmap"], detections, output_transform)
 
-            if writer is None:
+            if writer_vis is None or writer_annotated is None:
                 vis_h, vis_w = vis.shape[:2]
-                writer, output_video_path = create_video_writer(output_dir, video_path.stem, fps, (vis_w, vis_h))
+                ann_h, ann_w = annotated.shape[:2]
+                writer_vis, output_video_path = create_video_writer(
+                    output_dir, video_path.stem, "vis", fps, (vis_w, vis_h)
+                )
+                writer_annotated, annotated_video_path = create_video_writer(
+                    output_dir, video_path.stem, "annotated", fps, (ann_w, ann_h)
+                )
 
-            writer.write(vis)
+            writer_vis.write(vis)
+            writer_annotated.write(annotated)
 
             timestamp_ms = float(capture.get(cv2.CAP_PROP_POS_MSEC))
             if timestamp_ms <= 0:
@@ -181,10 +202,12 @@ def process_video(
                 print(f"{video_path.name}: processed {frame_index} frames")
     finally:
         capture.release()
-        if writer is not None:
-            writer.release()
+        if writer_vis is not None:
+            writer_vis.release()
+        if writer_annotated is not None:
+            writer_annotated.release()
 
-    if output_video_path is None:
+    if output_video_path is None or annotated_video_path is None:
         print(f"skip empty video: {video_path}")
         return
 
@@ -192,6 +215,7 @@ def process_video(
         "type": "video",
         "video": str(video_path),
         "visualization_video": str(output_video_path),
+        "annotated_video": str(annotated_video_path),
         "fps": fps,
         "frame_count": len(frame_results),
         "frames": frame_results,

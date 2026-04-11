@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 import cv2
 import numpy as np
@@ -52,32 +52,41 @@ class SpotDataset(Dataset):
         self.training = training
 
         data_cfg = cfg["data"]
+        self.dataset_layout = str(data_cfg.get("dataset_layout", "legacy"))
         self.root = Path(data_cfg["root"])
-        self.image_dir = self.root / data_cfg["image_dir"]
-        self.label_dir = self.root / data_cfg["label_dir"]
         self.split_dir = self.root / data_cfg["split_dir"]
         self.class_name = data_cfg["class_name"]
-        self.spot_size_label = data_cfg.get("spot_size_label", "spot_size")
-        self.spot_size_shape_type = data_cfg.get("spot_size_shape_type", "line")
+        self.point_label = str(data_cfg.get("point_label", self.class_name))
         self.input_w = int(data_cfg["input_width"])
         self.input_h = int(data_cfg["input_height"])
         self.down_ratio = int(data_cfg["down_ratio"])
         self.out_w = self.input_w // self.down_ratio
         self.out_h = self.input_h // self.down_ratio
         self.max_objects = int(data_cfg["max_objects"])
+        self.heatmap_diameter_out = float(data_cfg.get("heatmap_diameter_out", 6.0))
         self.augment_cfg = data_cfg.get("train_augment", {})
 
-        split_file = self.split_dir / data_cfg[f"{split_name}_split"]
-        if split_file.exists():
-            self.sample_ids = read_split_file(split_file)
+        if self.dataset_layout == "split_dirs":
+            image_dir_key = f"{split_name}_image_dir"
+            if image_dir_key not in data_cfg:
+                raise KeyError(f"Missing data.{image_dir_key} for dataset_layout=split_dirs")
+            self.image_dir = self.root / data_cfg[image_dir_key]
+            self.label_dir = self.image_dir
+            self.sample_ids = discover_labeled_ids(self.label_dir)
         else:
-            all_ids = discover_labeled_ids(self.label_dir)
-            train_ids, val_ids = make_train_val_split(
-                all_ids,
-                val_ratio=float(data_cfg["val_ratio"]),
-                seed=int(cfg["seed"]),
-            )
-            self.sample_ids = train_ids if split_name == "train" else val_ids
+            self.image_dir = self.root / data_cfg["image_dir"]
+            self.label_dir = self.root / data_cfg["label_dir"]
+            split_file = self.split_dir / data_cfg[f"{split_name}_split"]
+            if split_file.exists():
+                self.sample_ids = read_split_file(split_file)
+            else:
+                all_ids = discover_labeled_ids(self.label_dir)
+                train_ids, val_ids = make_train_val_split(
+                    all_ids,
+                    val_ratio=float(data_cfg["val_ratio"]),
+                    seed=int(cfg["seed"]),
+                )
+                self.sample_ids = train_ids if split_name == "train" else val_ids
 
         if not self.sample_ids:
             raise RuntimeError(f"No samples found for split={split_name}.")
@@ -85,29 +94,9 @@ class SpotDataset(Dataset):
     def __len__(self) -> int:
         return len(self.sample_ids)
 
-    def _parse_size_shape_segment(
-        self, shape: Dict
-    ) -> Optional[Tuple[Tuple[float, float], Tuple[float, float]]]:
-        if shape.get("label") != self.spot_size_label:
-            return None
-        if shape.get("shape_type") != self.spot_size_shape_type:
-            return None
-
-        pts = shape.get("points", [])
-        if len(pts) < 2:
-            return None
-
-        (x1, y1), (x2, y2) = pts[:2]
-        return (float(x1), float(y1)), (float(x2), float(y2))
-
     def _load_labelme(
         self, sample_id: str
-    ) -> Tuple[
-        np.ndarray,
-        List[Tuple[float, float]],
-        List[Tuple[Tuple[float, float], Tuple[float, float]]],
-        Dict,
-    ]:
+    ) -> Tuple[np.ndarray, List[Tuple[float, float]], Dict]:
         label_path = self.label_dir / f"{sample_id}.json"
         with open(label_path, "r", encoding="utf-8") as f:
             ann = json.load(f)
@@ -119,61 +108,14 @@ class SpotDataset(Dataset):
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
         points: List[Tuple[float, float]] = []
-        size_segments: List[Tuple[Tuple[float, float], Tuple[float, float]]] = []
         for shape in ann.get("shapes", []):
-            if shape.get("label") == self.class_name and shape.get("shape_type") == "point":
+            if shape.get("label") == self.point_label and shape.get("shape_type") == "point":
                 pt = shape.get("points", [])
                 if not pt:
                     continue
                 x, y = pt[0]
                 points.append((float(x), float(y)))
-                continue
-
-            segment = self._parse_size_shape_segment(shape)
-            if segment is not None:
-                size_segments.append(segment)
-
-        return image, points, size_segments, ann
-
-    def _compute_gaussian_size(
-        self,
-        size_segments: List[Tuple[Tuple[float, float], Tuple[float, float]]],
-        output_transform: Dict[str, float | int],
-        sample_id: str,
-    ) -> Tuple[float, float]:
-        if not size_segments:
-            raise ValueError(
-                f"Sample {sample_id} is missing required '{self.spot_size_label}' "
-                f"annotation with shape_type='{self.spot_size_shape_type}'."
-            )
-
-        transformed_diameters: List[float] = []
-        for p1, p2 in size_segments:
-            tp1 = np.array(transform_point(p1, output_transform), dtype=np.float32)
-            tp2 = np.array(transform_point(p2, output_transform), dtype=np.float32)
-            transformed_diameters.append(float(np.hypot(*(tp2 - tp1))))
-
-        diameter_out = float(np.mean(transformed_diameters))
-        radius = max(diameter_out / 2.0, 0.0)
-        return radius, diameter_out
-
-    def _compute_original_spot_diameter(
-        self,
-        size_segments: List[Tuple[Tuple[float, float], Tuple[float, float]]],
-        sample_id: str,
-    ) -> float:
-        if not size_segments:
-            raise ValueError(
-                f"Sample {sample_id} is missing required '{self.spot_size_label}' "
-                f"annotation with shape_type='{self.spot_size_shape_type}'."
-            )
-
-        diameters: List[float] = []
-        for p1, p2 in size_segments:
-            p1_arr = np.asarray(p1, dtype=np.float32)
-            p2_arr = np.asarray(p2, dtype=np.float32)
-            diameters.append(float(np.hypot(*(p2_arr - p1_arr))))
-        return float(np.mean(diameters))
+        return image, points, ann
 
     def _augment(self, image: np.ndarray) -> np.ndarray:
         if not self.training:
@@ -195,7 +137,7 @@ class SpotDataset(Dataset):
 
     def __getitem__(self, index: int) -> Dict[str, torch.Tensor | Dict | str]:
         sample_id = self.sample_ids[index]
-        image, points, size_segments, ann = self._load_labelme(sample_id)
+        image, points, ann = self._load_labelme(sample_id)
         image = self._augment(image)
 
         orig_h, orig_w = image.shape[:2]
@@ -210,9 +152,7 @@ class SpotDataset(Dataset):
         reg_mask = np.zeros((self.max_objects,), dtype=np.uint8)
         gt_points = np.zeros((self.max_objects, 2), dtype=np.float32)
         gt_point_mask = np.zeros((self.max_objects,), dtype=np.uint8)
-
-        spot_diameter_orig = self._compute_original_spot_diameter(size_segments, sample_id)
-        radius, spot_diameter = self._compute_gaussian_size(size_segments, output_transform, sample_id)
+        gaussian_radius = self.heatmap_diameter_out / 2.0
 
         for obj_idx, (x, y) in enumerate(points[: self.max_objects]):
             gt_points[obj_idx] = (x, y)
@@ -223,7 +163,7 @@ class SpotDataset(Dataset):
 
             ct = np.array([x, y], dtype=np.float32)
             ct_int = ct.astype(np.int32)
-            draw_gaussian(heatmap[0], (int(ct_int[0]), int(ct_int[1])), spot_diameter)
+            draw_gaussian(heatmap[0], (int(ct_int[0]), int(ct_int[1])), self.heatmap_diameter_out)
             ind[obj_idx] = ct_int[1] * self.out_w + ct_int[0]
             reg[obj_idx] = ct - ct_int
             reg_mask[obj_idx] = 1
@@ -233,15 +173,13 @@ class SpotDataset(Dataset):
             "orig_size": [orig_w, orig_h],
             "input_size": [self.input_w, self.input_h],
             "point_count": len(points),
-            "spot_size_annotation_count": len(size_segments),
             "input_transform": input_transform,
             "output_transform": output_transform,
             "image_width": ann.get("imageWidth", orig_w),
             "image_height": ann.get("imageHeight", orig_h),
-            "spot_diameter_orig": spot_diameter_orig,
-            "spot_diameter_out": spot_diameter,
-            "gaussian_radius": radius,
-            "gaussian_radius_source": "annotation",
+            "heatmap_diameter_out": self.heatmap_diameter_out,
+            "gaussian_radius": gaussian_radius,
+            "gaussian_radius_source": "fixed",
         }
 
         return {
@@ -253,7 +191,6 @@ class SpotDataset(Dataset):
             "gt_points": torch.from_numpy(gt_points),
             "gt_point_mask": torch.from_numpy(gt_point_mask),
             "orig_size": torch.tensor([orig_w, orig_h], dtype=torch.int64),
-            "spot_diameter_orig": torch.tensor(spot_diameter_orig, dtype=torch.float32),
             "sample_id": sample_id,
             "meta": meta,
         }

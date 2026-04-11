@@ -3,19 +3,20 @@ seed: 42
 
 data:
   root: .
-  image_dir: photos
-  label_dir: labels_raw
+  dataset_layout: split_dirs
+  train_image_dir: dataset/train/images
+  val_image_dir: dataset/val/images
   split_dir: splits
   train_split: train.txt
   val_split: val.txt
   val_ratio: 0.25
   class_name: spot
-  spot_size_label: spot_size
-  spot_size_shape_type: line
+  point_label: centroid
   input_width: 640
   input_height: 480
   down_ratio: 4
   max_objects: 512
+  heatmap_diameter_out: 6.0
   train_augment:
     brightness_gain: 0.1
     noise_std: 0.01
@@ -35,7 +36,7 @@ train:
   selection_min_delta: 0.0001
   selection_ap_weight: 0.7
   selection_f1_weight: 0.3
-  early_stop_patience: 12
+  early_stop_patience: 8
   scheduler_patience: 4
   scheduler_factor: 0.5
 
@@ -43,8 +44,7 @@ eval:
   score_thresholds: [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
   topk: 256
   nms_kernel: 9
-  match_radius_scale: 0.3
-  min_match_radius: 3.0
+  match_radius: 6.0
 
 infer:
   score_threshold: 0.3

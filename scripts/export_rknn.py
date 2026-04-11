@@ -46,7 +46,7 @@ class OnnxExportWrapper(nn.Module):
 
     def forward(self, images: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         outputs = self.model(images)
-        return outputs["heatmap"], outputs["reg"]
+        return outputs["heatmap_logits"].sigmoid(), outputs["reg"]
 
 
 def export_raw_onnx(checkpoint_path: Path, output_onnx: Path, cfg: dict,
@@ -102,7 +102,11 @@ def export_raw_onnx(checkpoint_path: Path, output_onnx: Path, cfg: dict,
 
     print(f"[onnx] exported -> {output_onnx}")
     print(f"[onnx] input:  images [{batch_size}, 3, {input_h}, {input_w}] float32")
-    print(f"[onnx] outputs: heatmap{tuple(sample_outputs['heatmap'].shape)} reg{tuple(sample_outputs['reg'].shape)}")
+    print(
+        "[onnx] outputs: heatmap"
+        f"{tuple(sample_outputs['heatmap_logits'].sigmoid().shape)} "
+        f"reg{tuple(sample_outputs['reg'].shape)}"
+    )
 
 
 # ---------------------------------------------------------------------------
