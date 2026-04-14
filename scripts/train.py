@@ -25,7 +25,6 @@ from centernet_spot.evaluation import (
 )
 from centernet_spot.losses import get_heatmap_loss, reg_l1_loss
 from centernet_spot.model import SpotCenterNet, heatmap_probs_from_logits
-from centernet_spot.split import discover_labeled_ids, make_train_val_split, write_split_file
 from centernet_spot.transforms import build_resize_pad_transform
 from centernet_spot.utils import ensure_dir, get_device, save_json, set_seed
 from centernet_spot.visualization import (
@@ -40,26 +39,12 @@ DEFAULT_EVAL_THRESHOLDS = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
 LOGGER_NAME = "centernet_spot.train"
 
 
-def refresh_splits(cfg: dict) -> dict[str, int]:
+def collect_dataset_stats(cfg: dict) -> dict[str, int]:
     data_cfg = cfg["data"]
-    dataset_layout = str(data_cfg.get("dataset_layout", "legacy"))
     root = Path(data_cfg["root"])
-    split_dir = ensure_dir(root / data_cfg["split_dir"])
-    if dataset_layout == "split_dirs":
-        train_ids = discover_labeled_ids(root / data_cfg["train_image_dir"])
-        val_ids = discover_labeled_ids(root / data_cfg["val_image_dir"])
-        sample_ids = sorted(set(train_ids) | set(val_ids))
-    else:
-        label_dir = root / data_cfg["label_dir"]
-        sample_ids = discover_labeled_ids(label_dir)
-        train_ids, val_ids = make_train_val_split(
-            sample_ids,
-            val_ratio=float(data_cfg["val_ratio"]),
-            seed=int(cfg["seed"]),
-        )
-
-    write_split_file(split_dir / data_cfg["train_split"], train_ids)
-    write_split_file(split_dir / data_cfg["val_split"], val_ids)
+    train_ids = sorted(p.stem for p in (root / data_cfg["train_image_dir"]).glob("*.json"))
+    val_ids = sorted(p.stem for p in (root / data_cfg["val_image_dir"]).glob("*.json"))
+    sample_ids = sorted(set(train_ids) | set(val_ids))
 
     stats = {
         "labeled_samples": len(sample_ids),
@@ -487,7 +472,7 @@ def main() -> None:
     device = get_device()
     save_dir = ensure_dir(cfg["train"]["save_dir"])
     logger = setup_logger(save_dir)
-    split_stats = refresh_splits(cfg)
+    split_stats = collect_dataset_stats(cfg)
 
     heatmap_loss_type = cfg["train"].get("heatmap_loss_type", "mse")
     heatmap_loss_fn = get_heatmap_loss(heatmap_loss_type)

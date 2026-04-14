@@ -3,15 +3,8 @@ seed: 42
 
 data:
   root: .
-  dataset_layout: split_dirs
-  train_image_dir: dataset/train/images
-  val_image_dir: dataset/val/images
-  split_dir: splits
-  train_split: train.txt
-  val_split: val.txt
-  val_ratio: 0.25
-  class_name: spot
-  point_label: centroid
+  train_image_dir: dataset/train
+  val_image_dir: dataset/val
   input_width: 640
   input_height: 480
   down_ratio: 4

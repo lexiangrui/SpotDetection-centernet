@@ -7,15 +7,9 @@ import torch.nn.functional as F
 
 
 def heatmap_mse_loss(logits: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
-    """前景 MSE 损失：对 logits 做 sigmoid 后仅在 GT 前景区域计算。"""
+    """标准 MSE：对 logits 做 sigmoid 后与 GT 热图做全图均方误差。"""
     pred = logits.sigmoid()
-    fg_mask = (gt > 0).float()
-    valid_count = fg_mask.sum()
-    if valid_count <= 0:
-        return pred.new_zeros(())
-
-    sq_error = (pred - gt) ** 2
-    return (sq_error * fg_mask).sum() / valid_count
+    return F.mse_loss(pred, gt, reduction="mean")
 
 
 def heatmap_bce_loss(logits: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:

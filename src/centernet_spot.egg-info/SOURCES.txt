@@ -9,7 +9,6 @@ src/centernet_spot/losses.py
 src/centernet_spot/model.py
 src/centernet_spot/neck.py
 src/centernet_spot/preprocessing.py
-src/centernet_spot/split.py
 src/centernet_spot/transforms.py
 src/centernet_spot/utils.py
 src/centernet_spot/visualization.py

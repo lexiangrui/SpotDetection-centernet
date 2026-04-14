@@ -67,7 +67,6 @@
 │   ├── infer.py
 │   ├── export_onnx.py
 │   └── export_rknn.py
-├── splits/
 └── src/centernet_spot/
 ```
 
@@ -97,30 +96,30 @@ python -c "import torch; print(torch.__version__); print('cuda=', torch.cuda.is_
 
 ## 5. 数据格式
 
-默认训练数据位于 `dataset/`，按显式训练/验证目录组织：
+默认训练数据位于 `dataset/`，按显式训练/验证目录组织。旧版加工数据已保留为 `dataset1/`：
 
 ```text
 dataset/
 ├── train/
-│   ├── images/
-│   │   ├── xxx.jpg
-│   │   └── xxx.json
-│   └── labels/        # 可选：原始 YOLO pose txt
+│   ├── xxx.jpg
+│   └── xxx.json
 └── val/
-    ├── images/
-    │   ├── yyy.jpg
-    │   └── yyy.json
-    └── labels/
+    ├── yyy.jpg
+    └── yyy.json
 ```
 
 标注约定：
 
-- 光斑中心：`label = "centroid"`，`shape_type = "point"`
+- 光斑中心：`label = "spot"`，`shape_type = "point"`
 
-当前训练数据加载逻辑会读取 `dataset/train/images/*.json` 和 `dataset/val/images/*.json` 中的 `centroid` 点标注，并在训练前重写：
+当前训练数据加载逻辑会直接读取 `dataset/train/*.json` 和 `dataset/val/*.json` 中的 `spot(point)` 标注。
 
-- `splits/train.txt`
-- `splits/val.txt`
+标注命令：
+
+```bash
+labelme dataset/train
+labelme dataset/val
+```
 
 ## 5. 训练
 
@@ -179,7 +178,7 @@ python scripts/infer.py \
 python scripts/infer.py \
   --config configs/spot_centernet.yaml \
   --checkpoint models/spot_centernet_resnet18_focal/best.pt \
-  --input dataset/val/images \
+  --input dataset/val \
   --output outputs/infer_all
 ```
 
@@ -189,7 +188,7 @@ python scripts/infer.py \
 python scripts/infer.py \
   --config configs/spot_centernet.yaml \
   --checkpoint models/spot_centernet_resnet18_focal/best.pt \
-  --input video/capture.mp4 \
+  --input video/capture4.mp4 \
   --output outputs/infer_video
 ```
 
@@ -257,7 +256,7 @@ python scripts/export_rknn.py \
 当前 `export_rknn.py` 会：
 
 - 需要时先导出 ONNX
-- 从 `splits/val.txt` 读取标定样本
+- 直接从 `dataset/val` 读取标定样本
 - 做与部署一致的 RGB letterbox 预处理
 - 在 `.calib_cache/` 下缓存标定 `.npy/.txt`
 - 输出 `int8` 或 `fp16` RKNN 模型
@@ -267,8 +266,7 @@ python scripts/export_rknn.py \
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
 | `--platform` | `rk3576` | 目标平台 |
-| `--calib-split` | `splits/val.txt` | 标定样本列表 |
-| `--photos-dir` | `photos` | 原图目录 |
+| `--calib-image-dir` | `dataset/val` | 标定图片目录 |
 | `--calib-size` | `100` | 标定图片上限 |
 | `--reuse-calib` | 关闭 | 复用已有标定缓存 |
 

@@ -114,25 +114,17 @@ def export_raw_onnx(checkpoint_path: Path, output_onnx: Path, cfg: dict,
 # ---------------------------------------------------------------------------
 
 def get_image_paths_for_calibration(
-    split_file: Path,
-    photos_dir: Path,
+    image_dir: Path,
     max_images: int = 100,
 ) -> list[Path]:
-    """Read image IDs from a split file and return full paths."""
-    if not split_file.exists():
-        print(f"[calib] split file not found: {split_file}, using all photos")
-        photo_files = sorted(photos_dir.glob("*.jpg")) + sorted(photos_dir.glob("*.png"))
-        return photo_files[:max_images]
+    """Read calibration images directly from a directory."""
+    if not image_dir.exists():
+        raise FileNotFoundError(f"Calibration image directory not found: {image_dir}")
 
-    ids = [line.strip() for line in split_file.read_text().splitlines() if line.strip()]
-    paths = []
-    for img_id in ids:
-        for suffix in (".jpg", ".jpeg", ".png"):
-            p = photos_dir / f"{img_id}{suffix}"
-            if p.exists():
-                paths.append(p)
-                break
-    return paths[:max_images]
+    image_paths: list[Path] = []
+    for pattern in ("*.jpg", "*.jpeg", "*.png"):
+        image_paths.extend(sorted(image_dir.glob(pattern)))
+    return image_paths[:max_images]
 
 
 def build_calibration_dataset(
@@ -266,10 +258,8 @@ def main() -> None:
                         help="导出模式: int8 (INT8 量化), fp16 (浮点模型)")
     parser.add_argument("--platform", type=str, default="rk3576",
                         help="目标平台，如 rk3576, rk3588, rk356x 等 (默认: rk3576).")
-    parser.add_argument("--calib-split", type=str, default="splits/val.txt",
-                        help="Split file for calibration images (default: splits/val.txt).")
-    parser.add_argument("--photos-dir", type=str, default="photos",
-                        help="Directory with source images (default: photos).")
+    parser.add_argument("--calib-image-dir", type=str, default="dataset/val",
+                        help="Directory with calibration images (default: dataset/val).")
     parser.add_argument("--calib-dir", type=str, default=".calib_cache",
                         help="Directory to cache calibration .npy (default: .calib_cache).")
     parser.add_argument("--calib-size", type=int, default=100,
@@ -285,7 +275,7 @@ def main() -> None:
         sys.exit(1)
 
     project_root = Path(__file__).resolve().parents[1]
-    photos_dir = (project_root / args.photos_dir).resolve()
+    calib_image_dir = (project_root / args.calib_image_dir).resolve()
     calib_dir = (project_root / args.calib_dir).resolve()
 
     # Resolve config
@@ -306,14 +296,8 @@ def main() -> None:
         else:
             raise ValueError("Config not found. Pass --config or use a checkpoint with 'config' field.")
     else:
-        # Use val split for config lookup
-        val_split = project_root / args.calib_split
-        if val_split.exists():
-            from centernet_spot.config import load_config
-            cfg = load_config(args.config or "configs/spot_centernet.yaml")
-        else:
-            from centernet_spot.config import load_config
-            cfg = load_config(args.config or "configs/spot_centernet.yaml")
+        from centernet_spot.config import load_config
+        cfg = load_config(args.config or "configs/spot_centernet.yaml")
 
     input_h = int(cfg["data"]["input_height"])
     input_w = int(cfg["data"]["input_width"])
@@ -341,13 +325,12 @@ def main() -> None:
     if args.quantize == "int8":
         calib_npy = calib_dir / f"calib_{input_h}x{input_w}.npy"
         calib_dataset = calib_npy.with_suffix('.txt')
-        split_file = project_root / args.calib_split
 
         if args.reuse_calib and calib_dataset.exists():
             print(f"[calib] reuse cached: {calib_dataset}")
         else:
-            print(f"[calib] building from: {split_file}")
-            image_paths = get_image_paths_for_calibration(split_file, photos_dir, args.calib_size)
+            print(f"[calib] building from: {calib_image_dir}")
+            image_paths = get_image_paths_for_calibration(calib_image_dir, args.calib_size)
             if not image_paths:
                 print("ERROR: no calibration images found", file=sys.stderr)
                 sys.exit(1)

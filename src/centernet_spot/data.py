@@ -9,9 +9,10 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from .split import discover_labeled_ids, make_train_val_split, read_split_file
 from .transforms import build_resize_pad_transform, resize_and_pad_image, transform_point
 from .utils import normalize_rgb_image
+
+POINT_LABEL = "spot"
 
 
 def gaussian2d(shape: Tuple[int, int], sigma: float = 1.0) -> np.ndarray:
@@ -52,11 +53,7 @@ class SpotDataset(Dataset):
         self.training = training
 
         data_cfg = cfg["data"]
-        self.dataset_layout = str(data_cfg.get("dataset_layout", "legacy"))
         self.root = Path(data_cfg["root"])
-        self.split_dir = self.root / data_cfg["split_dir"]
-        self.class_name = data_cfg["class_name"]
-        self.point_label = str(data_cfg.get("point_label", self.class_name))
         self.input_w = int(data_cfg["input_width"])
         self.input_h = int(data_cfg["input_height"])
         self.down_ratio = int(data_cfg["down_ratio"])
@@ -66,27 +63,11 @@ class SpotDataset(Dataset):
         self.heatmap_diameter_out = float(data_cfg.get("heatmap_diameter_out", 6.0))
         self.augment_cfg = data_cfg.get("train_augment", {})
 
-        if self.dataset_layout == "split_dirs":
-            image_dir_key = f"{split_name}_image_dir"
-            if image_dir_key not in data_cfg:
-                raise KeyError(f"Missing data.{image_dir_key} for dataset_layout=split_dirs")
-            self.image_dir = self.root / data_cfg[image_dir_key]
-            self.label_dir = self.image_dir
-            self.sample_ids = discover_labeled_ids(self.label_dir)
-        else:
-            self.image_dir = self.root / data_cfg["image_dir"]
-            self.label_dir = self.root / data_cfg["label_dir"]
-            split_file = self.split_dir / data_cfg[f"{split_name}_split"]
-            if split_file.exists():
-                self.sample_ids = read_split_file(split_file)
-            else:
-                all_ids = discover_labeled_ids(self.label_dir)
-                train_ids, val_ids = make_train_val_split(
-                    all_ids,
-                    val_ratio=float(data_cfg["val_ratio"]),
-                    seed=int(cfg["seed"]),
-                )
-                self.sample_ids = train_ids if split_name == "train" else val_ids
+        image_dir_key = f"{split_name}_image_dir"
+        if image_dir_key not in data_cfg:
+            raise KeyError(f"Missing data.{image_dir_key}")
+        self.image_dir = self.root / data_cfg[image_dir_key]
+        self.sample_ids = sorted(p.stem for p in self.image_dir.glob("*.json"))
 
         if not self.sample_ids:
             raise RuntimeError(f"No samples found for split={split_name}.")
@@ -97,11 +78,16 @@ class SpotDataset(Dataset):
     def _load_labelme(
         self, sample_id: str
     ) -> Tuple[np.ndarray, List[Tuple[float, float]], Dict]:
-        label_path = self.label_dir / f"{sample_id}.json"
+        label_path = self.image_dir / f"{sample_id}.json"
         with open(label_path, "r", encoding="utf-8") as f:
             ann = json.load(f)
 
-        image_path = (label_path.parent / ann["imagePath"]).resolve()
+        raw_image_path = str(ann.get("imagePath", "")).strip()
+        image_path = (label_path.parent / raw_image_path).resolve()
+        if not raw_image_path or not image_path.exists():
+            raise FileNotFoundError(
+                f"Image referenced by {label_path.name} not found. imagePath={raw_image_path!r}"
+            )
         image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
         if image is None:
             raise FileNotFoundError(f"Failed to read image: {image_path}")
@@ -109,12 +95,13 @@ class SpotDataset(Dataset):
 
         points: List[Tuple[float, float]] = []
         for shape in ann.get("shapes", []):
-            if shape.get("label") == self.point_label and shape.get("shape_type") == "point":
-                pt = shape.get("points", [])
-                if not pt:
-                    continue
-                x, y = pt[0]
-                points.append((float(x), float(y)))
+            if shape.get("label") != POINT_LABEL or shape.get("shape_type") != "point":
+                continue
+            raw_points = shape.get("points", [])
+            if not raw_points:
+                continue
+            x, y = raw_points[0]
+            points.append((float(x), float(y)))
         return image, points, ann
 
     def _augment(self, image: np.ndarray) -> np.ndarray:
