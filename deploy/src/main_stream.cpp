@@ -14,6 +14,7 @@
 #include <ctime>
 #include <cstring>
 #include <exception>
+#include <filesystem>
 #include <fcntl.h>
 #include <fstream>
 #include <iomanip>
@@ -839,10 +840,17 @@ bool save_detection_snapshot(const DetectionSnapshot& snapshot, std::string& out
     std::tm local_tm{};
     localtime_r(&now_time, &local_tm);
 
+    const std::filesystem::path output_dir("outputs");
+    std::error_code ec;
+    std::filesystem::create_directories(output_dir, ec);
+    if (ec) {
+        return false;
+    }
+
     std::ostringstream name_builder;
     name_builder << "spot_coords_frame_" << snapshot.frame_index << "_"
                  << std::put_time(&local_tm, "%Y%m%d_%H%M%S") << ".txt";
-    output_path = name_builder.str();
+    output_path = (output_dir / name_builder.str()).string();
 
     std::ofstream ofs(output_path);
     if (!ofs.is_open()) {

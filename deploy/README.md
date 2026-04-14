@@ -216,7 +216,7 @@ cmake .. -DRKNN_API_PATH=/path/to/rknn/runtime
 
 - 输入 `q` 回车：开关检测，视频流不断
 - 输入 `w` 回车：开关坐标网格
-- 输入 `e` 回车：导出当前帧坐标到 `spot_coords_frame_<frame>_<timestamp>.txt`
+- 输入 `e` 回车：导出当前帧坐标到 `outputs/spot_coords_frame_<frame>_<timestamp>.txt`
 
 UDP 推流端口固定为 `5000`。
 
@@ -238,4 +238,3 @@ UDP 推流端口固定为 `5000`。
 2. 等链路稳定
 3. 再打开 `/dev/video22`
 4. 再申请 buffer 并开始采集
-
