@@ -146,6 +146,7 @@ python scripts/train.py \
 - 使用 `ReduceLROnPlateau` 监控 `val_loss`
 - 用 `fitness = 0.7 * AP + 0.3 * F1` 选择 `best.pt`
 - 支持 early stopping
+- 支持在 `configs/spot_centernet.yaml` 里通过 `model.dropout_p` 控制 decoder 输出后的共享 `Dropout2d`，默认是 `0.1`
 
 训练输出目录默认是 `models/spot_centernet_resnet18_focal/`，其中会生成：
 

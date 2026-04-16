@@ -9,7 +9,7 @@ import torch
 
 from centernet_spot.config import load_config
 from centernet_spot.decode import decode_predictions
-from centernet_spot.model import SpotCenterNet, heatmap_probs_from_logits
+from centernet_spot.model import SpotCenterNet, build_model_from_config, heatmap_probs_from_logits
 from centernet_spot.preprocessing import preprocess_image
 from centernet_spot.transforms import build_resize_pad_transform
 from centernet_spot.utils import assign_spot_ids, ensure_dir, get_device, save_json
@@ -238,7 +238,7 @@ def main() -> None:
     output_dir = ensure_dir(args.output)
 
     checkpoint = torch.load(args.checkpoint, map_location=device)
-    model = SpotCenterNet(load_pretrained_backbone=False).to(device)
+    model = build_model_from_config(cfg, load_pretrained_backbone=False).to(device)
     model.load_state_dict(checkpoint["model"])
     model.eval()
 

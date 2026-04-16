@@ -8,7 +8,7 @@ import torch
 from torch import nn
 
 from centernet_spot.config import load_config
-from centernet_spot.model import SpotCenterNet, heatmap_probs_from_logits
+from centernet_spot.model import build_model_from_config, heatmap_probs_from_logits
 
 
 class OnnxExportWrapper(nn.Module):
@@ -56,7 +56,7 @@ def main() -> None:
     cfg = resolve_config(args.config, checkpoint)
     state_dict = resolve_state_dict(checkpoint)
 
-    model = SpotCenterNet(load_pretrained_backbone=False)
+    model = build_model_from_config(cfg, load_pretrained_backbone=False)
     model.load_state_dict(state_dict)
     model.eval()
 

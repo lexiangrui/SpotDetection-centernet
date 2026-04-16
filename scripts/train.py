@@ -24,7 +24,7 @@ from centernet_spot.evaluation import (
     select_best_threshold_metrics,
 )
 from centernet_spot.losses import get_heatmap_loss, reg_l1_loss
-from centernet_spot.model import SpotCenterNet, heatmap_probs_from_logits
+from centernet_spot.model import build_model_from_config, heatmap_probs_from_logits
 from centernet_spot.transforms import build_resize_pad_transform
 from centernet_spot.utils import ensure_dir, get_device, save_json, set_seed
 from centernet_spot.visualization import (
@@ -482,11 +482,10 @@ def main() -> None:
     val_loader = build_loader(cfg, split_name="val", training=False)
     log_run_context(save_dir, cfg, args, device, split_stats, train_loader, val_loader)
 
-    model = SpotCenterNet().to(device)
+    model = build_model_from_config(cfg).to(device)
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=float(cfg["train"]["lr"]),
-        weight_decay=float(cfg["train"]["weight_decay"]),
     )
     scheduler_patience = int(cfg["train"].get("scheduler_patience", 4))
     scheduler_factor = float(cfg["train"].get("scheduler_factor", 0.5))

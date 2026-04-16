@@ -60,7 +60,7 @@ def export_raw_onnx(checkpoint_path: Path, output_onnx: Path, cfg: dict,
     and feed float input directly.
     """
     from centernet_spot.config import load_config
-    from centernet_spot.model import SpotCenterNet
+    from centernet_spot.model import build_model_from_config
 
     checkpoint = torch.load(checkpoint_path, map_location="cpu")
 
@@ -77,7 +77,7 @@ def export_raw_onnx(checkpoint_path: Path, output_onnx: Path, cfg: dict,
         if isinstance(first_val, dict):
             state_dict = first_val
 
-    model = SpotCenterNet(load_pretrained_backbone=False)
+    model = build_model_from_config(resolved_cfg, load_pretrained_backbone=False)
     model.load_state_dict(state_dict)
     model.eval()
 

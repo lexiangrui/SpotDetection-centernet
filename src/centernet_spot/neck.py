@@ -69,13 +69,14 @@ class _DecoderStage(nn.Module):
         self.topdown = _ConvBNReLU(top_in_channels, out_channels)
         self.upsample = _UpsampleTranspose(out_channels)
         self.lateral = _PointwiseBN(skip_in_channels, out_channels)
-        self.refine = _ConvBNReLU(out_channels, out_channels)
+        self.refine = _ConvBNReLU(out_channels * 2, out_channels)
 
     def forward(self, top: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
         x = self.topdown(top)
         x = self.upsample(x)
-        x = x + self.lateral(skip)
-        return self.refine(x)
+        skip_feat = self.lateral(skip)
+        fused = x + skip_feat
+        return self.refine(torch.cat((fused, skip_feat), dim=1))
 
 
 class ResNetCenterNetDecoder(nn.Module):
